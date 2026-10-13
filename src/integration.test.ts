@@ -1327,3 +1327,203 @@ test("Records custom user-plan updates for all assigned users", async () => {
 
     assert.equal(Number(count.rows[0].total), 2);
 });
+
+//
+// TEST 18: Monthly report after account plan switch
+//
+
+test("Monthly report tracks account plan switches", async () => {
+    const account = await createTestAccount("Historical Account Report");
+    const auth = { "X-API-Key": account.apiKey };
+    const month = currentUtcMonth();
+
+    const before = await request(
+        "GET",
+        `/usage/monthly?month=${month}`,
+        undefined,
+        auth
+    );
+
+    assert.equal(before.status, 200);
+    assert.equal(Number(before.data.account.monthly_limit), 100);
+    assert.equal(before.data.account.historical_limits_available, true);
+
+    const switched = await request(
+        "PATCH",
+        "/accounts/plan",
+        { planId: 2 },
+        auth
+    );
+
+    assert.equal(switched.status, 200);
+
+    const after = await request(
+        "GET",
+        `/usage/monthly?month=${month}`,
+        undefined,
+        auth
+    );
+
+    assert.equal(after.status, 200);
+    assert.equal(after.data.account.plan_name, "Pro");
+    assert.equal(Number(after.data.account.monthly_limit), 1000);
+
+    const events = after.data.account.plan_changes;
+
+    assert.ok(Array.isArray(events));
+    assert.ok(
+        events.some(
+            (event: any) =>
+                event.change_type === "account_plan_switch" &&
+                Number(event.monthly_limit) === 1000
+        )
+    );
+});
+
+//
+// TEST 19: Monthly report after user plan switch
+//
+
+test("Monthly report tracks user plan switches and preserves usage", async () => {
+    const account = await createTestAccount("Historical User Report");
+    const auth = { "X-API-Key": account.apiKey };
+    const month = currentUtcMonth();
+    const userId = `historical-report-${randomUUID()}`;
+
+    const created = await post(
+        "/users",
+        { userId, planId: 3 },
+        auth
+    );
+
+    assert.equal(created.status, 201);
+
+    const consumed = await post(
+        "/consume",
+        {
+            userId,
+            units: 2,
+            requestId: randomUUID()
+        },
+        auth
+    );
+
+    assert.equal(consumed.status, 200);
+    assert.equal(consumed.data.accepted, true);
+
+    const switched = await request(
+        "PATCH",
+        "/users/plan",
+        { userId, planId: 4 },
+        auth
+    );
+
+    assert.equal(switched.status, 200);
+
+    const report = await request(
+        "GET",
+        `/usage/monthly?month=${month}`,
+        undefined,
+        auth
+    );
+
+    assert.equal(report.status, 200);
+
+    const user = report.data.users.find(
+        (row: any) => row.user_id === userId
+    );
+
+    assert.ok(user);
+    assert.equal(user.plan_name, "Premium");
+    assert.equal(Number(user.monthly_limit), 100);
+    assert.equal(Number(user.units_used), 2);
+    assert.equal(user.historical_limits_available, true);
+
+    assert.ok(
+        user.plan_changes.some(
+            (event: any) =>
+                event.change_type === "user_plan_switch" &&
+                Number(event.monthly_limit) === 100
+        )
+    );
+});
+
+//
+// TEST 20: Custom revisions and unknown historical limits
+//
+
+test("Monthly reports include custom revisions and do not invent older limits", async () => {
+    const account = await createTestAccount("Historical Revision Report");
+    const auth = { "X-API-Key": account.apiKey };
+    const month = currentUtcMonth();
+
+    const plan = await createCustomPlan(
+        account.apiKey,
+        "account",
+        5,
+        2
+    );
+
+    const planId = Number(plan.id);
+
+    const assigned = await request(
+        "PATCH",
+        "/accounts/plan",
+        { planId },
+        auth
+    );
+
+    assert.equal(assigned.status, 200);
+
+    const updated = await request(
+        "PATCH",
+        `/plans/${planId}`,
+        {
+            monthlyLimit: 15,
+            maxPerRequest: 5
+        },
+        auth
+    );
+
+    assert.equal(updated.status, 200);
+
+    const report = await request(
+        "GET",
+        `/usage/monthly?month=${month}`,
+        undefined,
+        auth
+    );
+
+    assert.equal(report.status, 200);
+    assert.equal(Number(report.data.account.monthly_limit), 15);
+    assert.equal(Number(report.data.account.max_per_request), 5);
+
+    assert.ok(
+        report.data.account.plan_changes.some(
+            (event: any) =>
+                event.change_type === "custom_plan_update" &&
+                Number(event.monthly_limit) === 15
+        )
+    );
+
+    // The account was created this month. Its historical
+    // limits are unknown for the previous month.
+    const [year, monthNumber] = month.split("-").map(Number);
+
+    const previousMonth = new Date(
+        Date.UTC(year, monthNumber - 2, 1)
+    ).toISOString().slice(0, 7);
+
+    const older = await request(
+        "GET",
+        `/usage/monthly?month=${previousMonth}`,
+        undefined,
+        auth
+    );
+
+    assert.equal(older.status, 200);
+    assert.equal(older.data.account.historical_limits_available, false);
+    assert.equal(older.data.account.plan_name, null);
+    assert.equal(older.data.account.monthly_limit, null);
+    assert.deepEqual(older.data.account.plan_changes, []);
+});
