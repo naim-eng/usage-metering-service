@@ -1077,3 +1077,253 @@ test("Records user plan switches without resetting usage", async () => {
     assert.equal(usage.rowCount, 1);
     assert.equal(Number(usage.rows[0].units_used), 3);
 });
+
+//
+// TEST 16: Custom account-plan revision history
+//
+
+test("Records custom account-plan updates without duplicate events", async () => {
+    const account = await createTestAccount("Account Revision History");
+    const accountId = String(account.account.id);
+    const auth = { "X-API-Key": account.apiKey };
+
+    const plan = await createCustomPlan(
+        account.apiKey,
+        "account",
+        5,
+        2
+    );
+
+    const planId = Number(plan.id);
+
+    const assigned = await request(
+        "PATCH",
+        "/accounts/plan",
+        { planId },
+        auth
+    );
+
+    assert.equal(assigned.status, 200);
+
+    const userId = `account-revision-user-${randomUUID()}`;
+
+    const created = await post(
+        "/users",
+        { userId, planId: 3 },
+        auth
+    );
+
+    assert.equal(created.status, 201);
+
+    const consumed = await post(
+        "/consume",
+        { userId, units: 2, requestId: randomUUID() },
+        auth
+    );
+
+    assert.equal(consumed.status, 200);
+    assert.equal(consumed.data.accepted, true);
+    assert.equal(consumed.data.accountRemaining, "3");
+
+    const updated = await request(
+        "PATCH",
+        `/plans/${planId}`,
+        {
+            name: "Revised Account Plan",
+            monthlyLimit: 15,
+            maxPerRequest: 5
+        },
+        auth
+    );
+
+    assert.equal(updated.status, 200);
+
+    const history = await pool.query(
+        `SELECT plan_name, monthly_limit, max_per_request
+         FROM plan_limit_history
+         WHERE account_id = $1
+           AND user_id IS NULL
+           AND plan_id = $2
+           AND change_type = 'custom_plan_update'`,
+        [accountId, planId]
+    );
+
+    assert.equal(history.rowCount, 1);
+    assert.equal(history.rows[0].plan_name, "Revised Account Plan");
+    assert.equal(Number(history.rows[0].monthly_limit), 15);
+    assert.equal(Number(history.rows[0].max_per_request), 5);
+
+    // Repeating an unchanged update must not add another event.
+    const repeated = await request(
+        "PATCH",
+        `/plans/${planId}`,
+        {
+            name: "Revised Account Plan",
+            monthlyLimit: 15,
+            maxPerRequest: 5
+        },
+        auth
+    );
+
+    assert.equal(repeated.status, 200);
+
+    const count = await pool.query(
+        `SELECT COUNT(*) AS total
+         FROM plan_limit_history
+         WHERE account_id = $1
+           AND user_id IS NULL
+           AND plan_id = $2
+           AND change_type = 'custom_plan_update'`,
+        [accountId, planId]
+    );
+
+    assert.equal(Number(count.rows[0].total), 1);
+
+    // Previously consumed credits must remain deducted.
+    const afterUpdate = await post(
+        "/consume",
+        { userId, units: 2, requestId: randomUUID() },
+        auth
+    );
+
+    assert.equal(afterUpdate.status, 200);
+    assert.equal(afterUpdate.data.accepted, true);
+
+    // Account: 15 - 2 - 2 = 11.
+    assert.equal(afterUpdate.data.accountRemaining, "11");
+});
+
+//
+// TEST 17: Custom user-plan revision history
+//
+
+test("Records custom user-plan updates for all assigned users", async () => {
+    const account = await createTestAccount("User Revision History");
+    const accountId = String(account.account.id);
+    const auth = { "X-API-Key": account.apiKey };
+
+    const plan = await createCustomPlan(
+        account.apiKey,
+        "user",
+        5,
+        2
+    );
+
+    const planId = Number(plan.id);
+    const userIds = [
+        `revision-a-${randomUUID()}`,
+        `revision-b-${randomUUID()}`
+    ];
+
+    const internalIds: string[] = [];
+
+    for (const userId of userIds) {
+        const created = await post(
+            "/users",
+            { userId, planId },
+            auth
+        );
+
+        assert.equal(created.status, 201);
+        internalIds.push(String(created.data.user.id));
+    }
+
+    // Each user consumes credits on the original plan.
+    for (const userId of userIds) {
+        const consumed = await post(
+            "/consume",
+            { userId, units: 2, requestId: randomUUID() },
+            auth
+        );
+
+        assert.equal(consumed.status, 200);
+        assert.equal(consumed.data.accepted, true);
+        assert.equal(consumed.data.userRemaining, "3");
+    }
+
+    const updated = await request(
+        "PATCH",
+        `/plans/${planId}`,
+        {
+            name: "Revised User Plan",
+            monthlyLimit: 20,
+            maxPerRequest: 5
+        },
+        auth
+    );
+
+    assert.equal(updated.status, 200);
+
+    // Both assigned users must receive their own history event.
+    const history = await pool.query(
+        `SELECT user_id, plan_name,
+                monthly_limit, max_per_request
+         FROM plan_limit_history
+         WHERE account_id = $1
+           AND plan_id = $2
+           AND change_type = 'custom_plan_update'
+         ORDER BY user_id`,
+        [accountId, planId]
+    );
+
+    assert.equal(history.rowCount, 2);
+
+    const recordedIds = history.rows.map(
+        row => String(row.user_id)
+    );
+
+    for (const internalId of internalIds) {
+        assert.ok(recordedIds.includes(internalId));
+    }
+
+    for (const event of history.rows) {
+        assert.equal(event.plan_name, "Revised User Plan");
+        assert.equal(Number(event.monthly_limit), 20);
+        assert.equal(Number(event.max_per_request), 5);
+    }
+
+    // Verify the original consumption remains recorded.
+    const afterUpdate = await post(
+        "/consume",
+        {
+            userId: userIds[0],
+            units: 3,
+            requestId: randomUUID()
+        },
+        auth
+    );
+
+    assert.equal(afterUpdate.status, 200);
+    assert.equal(afterUpdate.data.accepted, true);
+
+    // First user: 20 - 2 - 3 = 15.
+    assert.equal(afterUpdate.data.userRemaining, "15");
+
+    // Starter account: 100 - 2 - 2 - 3 = 93.
+    assert.equal(afterUpdate.data.accountRemaining, "93");
+
+    // An unchanged update must not create duplicate events.
+    const repeated = await request(
+        "PATCH",
+        `/plans/${planId}`,
+        {
+            name: "Revised User Plan",
+            monthlyLimit: 20,
+            maxPerRequest: 5
+        },
+        auth
+    );
+
+    assert.equal(repeated.status, 200);
+
+    const count = await pool.query(
+        `SELECT COUNT(*) AS total
+         FROM plan_limit_history
+         WHERE account_id = $1
+           AND plan_id = $2
+           AND change_type = 'custom_plan_update'`,
+        [accountId, planId]
+    );
+
+    assert.equal(Number(count.rows[0].total), 2);
+});
