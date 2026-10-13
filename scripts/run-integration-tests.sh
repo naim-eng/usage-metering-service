@@ -86,7 +86,6 @@ echo "Test server is ready."
 echo "Running integration tests..."
 
 # Run all integration tests.
-npx tsx --test src/integration.test.ts
-
+DB_NAME="$TEST_DB" npx tsx --test src/integration.test.ts
 echo ""
 echo "Integration tests completed successfully."

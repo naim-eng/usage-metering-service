@@ -1,4 +1,3 @@
-
 import { reportsRouter } from "./reports.js";
 import { historyRouter } from "./history.js";
 import { plansRouter } from "./plans.js";
@@ -125,9 +124,7 @@ app.post("/accounts", async (req, res) => {
         });
     } catch (error) {
         await client.query("ROLLBACK");
-
         console.error("Account creation failed:", error);
-
         res.status(500).json({
             error: "Failed to create account"
         });
@@ -159,8 +156,6 @@ app.post("/users", authenticateAccount, async (req, res) => {
     try {
         await client.query("BEGIN");
 
-        // Serialize account operations with consumption and
-        // plan switching.
         const account = await client.query(
             `SELECT id
              FROM accounts
@@ -171,15 +166,12 @@ app.post("/users", authenticateAccount, async (req, res) => {
 
         if (account.rowCount === 0) {
             await client.query("ROLLBACK");
-
             res.status(404).json({
                 error: "Account not found"
             });
             return;
         }
 
-        // A user may use a predefined plan or a custom
-        // user plan owned by this account.
         const plan = await client.query(
             `SELECT id, name, monthly_limit, max_per_request
              FROM plans
@@ -194,14 +186,12 @@ app.post("/users", authenticateAccount, async (req, res) => {
 
         if (plan.rowCount === 0) {
             await client.query("ROLLBACK");
-
             res.status(400).json({
                 error: "Invalid or inaccessible user plan"
             });
             return;
         }
 
-        // Create the user inside the transaction.
         const result = await client.query(
             `INSERT INTO users
                 (account_id, external_user_id, plan_id)
@@ -214,7 +204,6 @@ app.post("/users", authenticateAccount, async (req, res) => {
         const createdUser = result.rows[0];
         const selectedPlan = plan.rows[0];
 
-        // Record the exact quota limits assigned at creation.
         await client.query(
             `INSERT INTO plan_limit_history
                 (account_id, user_id, plan_id, plan_name,
@@ -253,7 +242,6 @@ app.post("/users", authenticateAccount, async (req, res) => {
         }
 
         console.error("User registration failed:", error);
-
         res.status(500).json({
             error: "Failed to register user"
         });
@@ -310,7 +298,6 @@ app.post("/consume", authenticateAccount, async (req, res) => {
         }
 
         console.error("Consumption failed:", error);
-
         res.status(500).json({
             error: "Failed to process consumption"
         });
@@ -322,7 +309,7 @@ app.use("/plans", plansRouter);
 app.use("/usage", historyRouter);
 app.use("/usage", reportsRouter);
 
-// Change the authenticated account's plan.
+// Change an account plan and record its new quota limits.
 app.patch("/accounts/plan", authenticateAccount, async (req, res) => {
     const accountId = res.locals.account.id;
     const { planId } = req.body ?? {};
@@ -338,13 +325,15 @@ app.patch("/accounts/plan", authenticateAccount, async (req, res) => {
         await client.query("BEGIN");
 
         const account = await client.query(
-            "SELECT id FROM accounts WHERE id = $1 FOR UPDATE",
+            `SELECT id, plan_id
+             FROM accounts
+             WHERE id = $1
+             FOR UPDATE`,
             [accountId]
         );
 
         if (account.rowCount === 0) {
             await client.query("ROLLBACK");
-
             res.status(404).json({
                 error: "Account not found"
             });
@@ -352,7 +341,8 @@ app.patch("/accounts/plan", authenticateAccount, async (req, res) => {
         }
 
         const plan = await client.query(
-            `SELECT id, name FROM plans
+            `SELECT id, name, monthly_limit, max_per_request
+             FROM plans
              WHERE id = $1
                AND plan_type = 'account'
                AND (owner_account_id IS NULL OR owner_account_id = $2)`,
@@ -361,9 +351,21 @@ app.patch("/accounts/plan", authenticateAccount, async (req, res) => {
 
         if (plan.rowCount === 0) {
             await client.query("ROLLBACK");
-
             res.status(400).json({
                 error: "Invalid or inaccessible account plan"
+            });
+            return;
+        }
+
+        const selectedPlan = plan.rows[0];
+
+        if (String(account.rows[0].plan_id) === String(planId)) {
+            await client.query("COMMIT");
+
+            res.json({
+                message: "Account is already on this plan",
+                planId: String(planId),
+                planName: selectedPlan.name
             });
             return;
         }
@@ -373,18 +375,33 @@ app.patch("/accounts/plan", authenticateAccount, async (req, res) => {
             [planId, accountId]
         );
 
+        await client.query(
+            `INSERT INTO plan_limit_history
+                (account_id, user_id, plan_id, plan_name,
+                 monthly_limit, max_per_request,
+                 effective_at, change_type)
+             VALUES
+                ($1, NULL, $2, $3, $4, $5,
+                 NOW(), 'account_plan_switch')`,
+            [
+                accountId,
+                selectedPlan.id,
+                selectedPlan.name,
+                selectedPlan.monthly_limit,
+                selectedPlan.max_per_request
+            ]
+        );
+
         await client.query("COMMIT");
 
         res.json({
             message: "Account plan updated",
             planId: String(planId),
-            planName: plan.rows[0].name
+            planName: selectedPlan.name
         });
     } catch (error) {
         await client.query("ROLLBACK");
-
         console.error("Plan assignment failed:", error);
-
         res.status(500).json({
             error: "Failed to update account plan"
         });
@@ -393,7 +410,7 @@ app.patch("/accounts/plan", authenticateAccount, async (req, res) => {
     }
 });
 
-// Change a user's plan within the authenticated account.
+// Change a user plan and record its new quota limits.
 app.patch("/users/plan", authenticateAccount, async (req, res) => {
     const accountId = res.locals.account.id;
     const { userId, planId } = req.body ?? {};
@@ -416,14 +433,30 @@ app.patch("/users/plan", authenticateAccount, async (req, res) => {
     try {
         await client.query("BEGIN");
 
-        await client.query(
-            "SELECT id FROM accounts WHERE id = $1 FOR UPDATE",
+        // Coordinate plan switching with consumption requests.
+        const account = await client.query(
+            `SELECT id
+             FROM accounts
+             WHERE id = $1
+             FOR UPDATE`,
             [accountId]
         );
 
+        if (account.rowCount === 0) {
+            await client.query("ROLLBACK");
+
+            res.status(404).json({
+                error: "Account not found"
+            });
+            return;
+        }
+
+        // Find only users belonging to the authenticated account.
         const user = await client.query(
-            `SELECT id FROM users
-             WHERE account_id = $1 AND external_user_id = $2`,
+            `SELECT id, plan_id
+             FROM users
+             WHERE account_id = $1
+               AND external_user_id = $2`,
             [accountId, userId.trim()]
         );
 
@@ -436,11 +469,17 @@ app.patch("/users/plan", authenticateAccount, async (req, res) => {
             return;
         }
 
+        // Allow predefined user plans or custom plans
+        // owned by this account.
         const plan = await client.query(
-            `SELECT id, name FROM plans
+            `SELECT id, name, monthly_limit, max_per_request
+             FROM plans
              WHERE id = $1
                AND plan_type = 'user'
-               AND (owner_account_id IS NULL OR owner_account_id = $2)`,
+               AND (
+                   owner_account_id IS NULL
+                   OR owner_account_id = $2
+               )`,
             [planId, accountId]
         );
 
@@ -453,9 +492,47 @@ app.patch("/users/plan", authenticateAccount, async (req, res) => {
             return;
         }
 
+        const selectedPlan = plan.rows[0];
+        const selectedUser = user.rows[0];
+
+        // Do not create duplicate history events.
+        if (String(selectedUser.plan_id) === String(planId)) {
+            await client.query("COMMIT");
+
+            res.json({
+                message: "User is already on this plan",
+                userId: userId.trim(),
+                planId: String(planId),
+                planName: selectedPlan.name
+            });
+            return;
+        }
+
+        // Change the user's plan.
         await client.query(
-            "UPDATE users SET plan_id = $1 WHERE id = $2",
-            [planId, user.rows[0].id]
+            `UPDATE users
+             SET plan_id = $1
+             WHERE id = $2 AND account_id = $3`,
+            [planId, selectedUser.id, accountId]
+        );
+
+        // Record the exact quota limits that became effective.
+        await client.query(
+            `INSERT INTO plan_limit_history
+                (account_id, user_id, plan_id, plan_name,
+                 monthly_limit, max_per_request,
+                 effective_at, change_type)
+             VALUES
+                ($1, $2, $3, $4, $5, $6,
+                 NOW(), 'user_plan_switch')`,
+            [
+                accountId,
+                selectedUser.id,
+                selectedPlan.id,
+                selectedPlan.name,
+                selectedPlan.monthly_limit,
+                selectedPlan.max_per_request
+            ]
         );
 
         await client.query("COMMIT");
@@ -464,7 +541,7 @@ app.patch("/users/plan", authenticateAccount, async (req, res) => {
             message: "User plan updated",
             userId: userId.trim(),
             planId: String(planId),
-            planName: plan.rows[0].name
+            planName: selectedPlan.name
         });
     } catch (error) {
         await client.query("ROLLBACK");
@@ -483,3 +560,4 @@ app.patch("/users/plan", authenticateAccount, async (req, res) => {
 app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
 });
+

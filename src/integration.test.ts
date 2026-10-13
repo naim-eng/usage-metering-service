@@ -1,9 +1,23 @@
 
 import "dotenv/config";
 
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { pool } from "./db.js";
+
+// Never allow direct integration-test database access
+// unless the isolated test database is selected.
+if (process.env.DB_NAME !== "usage_metering_test") {
+    throw new Error(
+        "Integration tests must use usage_metering_test"
+    );
+}
+
+// Close PostgreSQL connections after all tests complete.
+after(async () => {
+    await pool.end();
+});
 
 const BASE_URL = "http://localhost:3001";
 
@@ -19,7 +33,9 @@ async function request(
             "Content-Type": "application/json",
             ...headers
         },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) })
+        ...(body === undefined
+            ? {}
+            : { body: JSON.stringify(body) })
     });
 
     return {
@@ -91,10 +107,13 @@ function currentUtcMonth(): string {
     const now = new Date();
     const year = now.getUTCFullYear();
     const month = String(now.getUTCMonth() + 1).padStart(2, "0");
+
     return `${year}-${month}`;
 }
 
+// ------------------------------------------------------------
 // TEST 1: Missing API key
+// ------------------------------------------------------------
 
 test("Rejects consumption without an API key", async () => {
     const result = await post("/consume", {
@@ -107,7 +126,9 @@ test("Rejects consumption without an API key", async () => {
     assert.equal(result.data.error, "Missing or invalid API key");
 });
 
+// ------------------------------------------------------------
 // TEST 2: Invalid API key
+// ------------------------------------------------------------
 
 test("Rejects consumption with an invalid API key", async () => {
     const result = await post(
@@ -124,7 +145,9 @@ test("Rejects consumption with an invalid API key", async () => {
     assert.equal(result.data.error, "Invalid API key");
 });
 
+// ------------------------------------------------------------
 // TEST 3: Account isolation
+// ------------------------------------------------------------
 
 test("Prevents one account from accessing another account's user", async () => {
     const uniqueId = randomUUID();
@@ -168,7 +191,9 @@ test("Prevents one account from accessing another account's user", async () => {
     assert.equal(result.data.error, "User not found in account");
 });
 
+// ------------------------------------------------------------
 // TEST 4: Monthly user quota
+// ------------------------------------------------------------
 
 test("Rejects consumption when user monthly credits are exhausted", async () => {
     const uniqueId = randomUUID();
@@ -192,6 +217,7 @@ test("Rejects consumption when user monthly credits are exhausted", async () => 
 
     assert.equal(user.status, 201);
 
+    // Basic: 10 monthly credits, maximum 2 per request.
     for (let i = 0; i < 5; i++) {
         const result = await post(
             "/consume",
@@ -224,7 +250,9 @@ test("Rejects consumption when user monthly credits are exhausted", async () => 
     assert.equal(rejected.data.userRemaining, "0");
 });
 
+// ------------------------------------------------------------
 // TEST 5: Idempotency
+// ------------------------------------------------------------
 
 test("Does not double-charge repeated requests", async () => {
     const uniqueId = randomUUID();
@@ -288,7 +316,9 @@ test("Does not double-charge repeated requests", async () => {
     assert.equal(third.data.userRemaining, "7");
 });
 
+// ------------------------------------------------------------
 // TEST 6: Concurrency safety
+// ------------------------------------------------------------
 
 test("Prevents concurrent requests from exceeding account quota", async () => {
     const uniqueId = randomUUID();
@@ -360,9 +390,11 @@ test("Prevents concurrent requests from exceeding account quota", async () => {
     assert.equal(second.status, 200);
 
     const results = [first.data, second.data];
+
     const accepted = results.filter(
         result => result.accepted === true
     );
+
     const rejected = results.filter(
         result => result.accepted === false
     );
@@ -374,7 +406,9 @@ test("Prevents concurrent requests from exceeding account quota", async () => {
     assert.equal(rejected[0].accountRemaining, "0");
 });
 
+// ------------------------------------------------------------
 // TEST 7: Updating a custom plan preserves usage
+// ------------------------------------------------------------
 
 test("Updates an owned custom plan without resetting consumed credits", async () => {
     const account = await createTestAccount("Plan Update Test");
@@ -388,6 +422,7 @@ test("Updates an owned custom plan without resetting consumed credits", async ()
     );
 
     const planId = Number(customPlan.id);
+
     assert.ok(Number.isSafeInteger(planId) && planId > 0);
 
     const switched = await request(
@@ -466,7 +501,9 @@ test("Updates an owned custom plan without resetting consumed credits", async ()
     assert.equal(secondConsumption.data.userRemaining, "6");
 });
 
+// ------------------------------------------------------------
 // TEST 8: Custom-plan ownership
+// ------------------------------------------------------------
 
 test("Prevents an account from updating another account's custom plan", async () => {
     const owner = await createTestAccount("Plan Owner");
@@ -501,7 +538,9 @@ test("Prevents an account from updating another account's custom plan", async ()
     assert.equal(Number(ownerUpdate.data.plan.monthly_limit), 25);
 });
 
+// ------------------------------------------------------------
 // TEST 9: Predefined-plan protection
+// ------------------------------------------------------------
 
 test("Prevents modification of predefined system plans", async () => {
     const account = await createTestAccount("System Plan Protection");
@@ -519,7 +558,9 @@ test("Prevents modification of predefined system plans", async () => {
     assert.equal(result.status, 404);
 });
 
-// TEST 10: Usage history includes accepted and rejected requests
+// ------------------------------------------------------------
+// TEST 10: Usage history
+// ------------------------------------------------------------
 
 test("Usage history records accepted and rejected requests", async () => {
     const account = await createTestAccount("History Test");
@@ -574,18 +615,26 @@ test("Usage history records accepted and rejected requests", async () => {
         (record: any) => record.request_id === rejectedId
     );
 
-    assert.ok(acceptedRecord, "Accepted request should appear in history");
-    assert.ok(rejectedRecord, "Rejected request should appear in history");
+    assert.ok(
+        acceptedRecord,
+        "Accepted request should appear in history"
+    );
+
+    assert.ok(
+        rejectedRecord,
+        "Rejected request should appear in history"
+    );
 
     assert.equal(acceptedRecord.accepted, true);
     assert.equal(Number(acceptedRecord.units_requested), 2);
-
     assert.equal(rejectedRecord.accepted, false);
     assert.equal(rejectedRecord.rejection_scope, "user");
     assert.equal(rejectedRecord.rejection_rule, "max_per_request");
 });
 
-// TEST 11: Account isolation in usage history
+// ------------------------------------------------------------
+// TEST 11: Usage-history isolation
+// ------------------------------------------------------------
 
 test("Usage history does not expose another account's requests", async () => {
     const accountA = await createTestAccount("History Owner");
@@ -619,6 +668,7 @@ test("Usage history does not expose another account's requests", async () => {
     );
 
     assert.equal(otherHistory.status, 200);
+
     assert.equal(
         otherHistory.data.history.some(
             (record: any) => record.request_id === requestId
@@ -634,6 +684,7 @@ test("Usage history does not expose another account's requests", async () => {
     );
 
     assert.equal(ownerHistory.status, 200);
+
     assert.equal(
         ownerHistory.data.history.some(
             (record: any) => record.request_id === requestId
@@ -642,7 +693,9 @@ test("Usage history does not expose another account's requests", async () => {
     );
 });
 
-// TEST 12: Monthly report totals and tenant isolation
+// ------------------------------------------------------------
+// TEST 12: Monthly reporting
+// ------------------------------------------------------------
 
 test("Monthly reporting returns accurate account and user usage", async () => {
     const account = await createTestAccount("Monthly Report Test");
@@ -693,9 +746,6 @@ test("Monthly reporting returns accurate account and user usage", async () => {
 
     assert.equal(report.status, 200);
     assert.equal(report.data.month, month);
-
-    // Starter account limit: 100.
-    // Two users have consumed 2 credits each.
     assert.equal(Number(report.data.account.monthly_limit), 100);
     assert.equal(Number(report.data.account.units_used), 4);
 
@@ -712,7 +762,6 @@ test("Monthly reporting returns accurate account and user usage", async () => {
     assert.equal(Number(rowA.units_used), 2);
     assert.equal(Number(rowB.units_used), 2);
 
-    // A different account must not see the first account's usage.
     const otherReport = await request(
         "GET",
         `/usage/monthly?month=${month}`,
@@ -722,15 +771,20 @@ test("Monthly reporting returns accurate account and user usage", async () => {
 
     assert.equal(otherReport.status, 200);
     assert.equal(Number(otherReport.data.account.units_used), 0);
+
     assert.equal(
         otherReport.data.users.some(
-            (row: any) => row.user_id === userA || row.user_id === userB
+            (row: any) =>
+                row.user_id === userA ||
+                row.user_id === userB
         ),
         false
     );
 });
 
-// TEST 13: Invalid reporting parameters
+// ------------------------------------------------------------
+// TEST 13: Reporting validation
+// ------------------------------------------------------------
 
 test("Rejects invalid reporting parameters", async () => {
     const account = await createTestAccount("Reporting Validation");
@@ -760,4 +814,266 @@ test("Rejects invalid reporting parameters", async () => {
     assert.equal(invalidHistory.status, 400);
     assert.equal(excessiveLimit.status, 400);
     assert.equal(invalidMonth.status, 400);
+});
+
+// ------------------------------------------------------------
+// TEST 14: Account plan-switch history in PostgreSQL
+// ------------------------------------------------------------
+
+test("Records account plan switches in PostgreSQL history", async () => {
+    // Create a fresh account on the Starter plan.
+    const account = await createTestAccount("Plan History Test");
+
+    const accountId = String(account.account.id);
+    const auth = { "X-API-Key": account.apiKey };
+
+    // Starter is plan 1. Pro is predefined account plan 2.
+    const proPlanId = 2;
+
+    // Verify the initial baseline exists.
+    const baseline = await pool.query(
+        `SELECT
+            plan_id,
+            plan_name,
+            monthly_limit,
+            max_per_request,
+            change_type
+         FROM plan_limit_history
+         WHERE account_id = $1
+           AND user_id IS NULL
+           AND change_type = 'baseline'`,
+        [accountId]
+    );
+
+    assert.equal(baseline.rowCount, 1);
+    assert.equal(baseline.rows[0].plan_name, "Starter");
+    assert.equal(Number(baseline.rows[0].monthly_limit), 100);
+    assert.equal(Number(baseline.rows[0].max_per_request), 20);
+
+    // Switch the account from Starter to Pro using the API.
+    const switched = await request(
+        "PATCH",
+        "/accounts/plan",
+        { planId: proPlanId },
+        auth
+    );
+
+    assert.equal(
+        switched.status,
+        200,
+        `Plan switch failed: ${JSON.stringify(switched.data)}`
+    );
+
+    // Verify the change was recorded in PostgreSQL.
+    const history = await pool.query(
+        `SELECT
+            account_id,
+            user_id,
+            plan_id,
+            plan_name,
+            monthly_limit,
+            max_per_request,
+            change_type,
+            effective_at
+         FROM plan_limit_history
+         WHERE account_id = $1
+           AND user_id IS NULL
+           AND change_type = 'account_plan_switch'
+         ORDER BY id DESC`,
+        [accountId]
+    );
+
+    assert.equal(history.rowCount, 1);
+
+    const event = history.rows[0];
+
+    assert.equal(String(event.account_id), accountId);
+    assert.equal(event.user_id, null);
+    assert.equal(Number(event.plan_id), proPlanId);
+    assert.equal(event.plan_name, "Pro");
+    assert.equal(Number(event.monthly_limit), 1000);
+    assert.equal(Number(event.max_per_request), 100);
+    assert.equal(event.change_type, "account_plan_switch");
+    assert.ok(event.effective_at);
+
+    // Selecting the same plan again should not create
+    // another history event.
+    const repeated = await request(
+        "PATCH",
+        "/accounts/plan",
+        { planId: proPlanId },
+        auth
+    );
+
+    assert.equal(repeated.status, 200);
+
+    const count = await pool.query(
+        `SELECT COUNT(*) AS total
+         FROM plan_limit_history
+         WHERE account_id = $1
+           AND user_id IS NULL
+           AND change_type = 'account_plan_switch'`,
+        [accountId]
+    );
+
+    assert.equal(Number(count.rows[0].total), 1);
+
+    // Verify the actual account assignment was updated.
+    const assignedPlan = await pool.query(
+        "SELECT plan_id FROM accounts WHERE id = $1",
+        [accountId]
+    );
+
+    assert.equal(assignedPlan.rowCount, 1);
+    assert.equal(Number(assignedPlan.rows[0].plan_id), proPlanId);
+});
+
+// ------------------------------------------------------------
+// TEST 15: User plan-switch history in PostgreSQL
+// ------------------------------------------------------------
+
+test("Records user plan switches without resetting usage", async () => {
+    // Create a fresh account on the Starter plan.
+    const account = await createTestAccount("User Plan History Test");
+
+    const accountId = String(account.account.id);
+    const auth = { "X-API-Key": account.apiKey };
+    const userId = `history-switch-user-${randomUUID()}`;
+
+    // Create a Basic user: 10 credits/month, max 2/request.
+    const created = await post(
+        "/users",
+        { userId, planId: 3 },
+        auth
+    );
+
+    assert.equal(created.status, 201);
+
+    const internalUserId = String(created.data.user.id);
+
+    // Verify the user's initial quota snapshot.
+    const baseline = await pool.query(
+        `SELECT plan_id, plan_name, monthly_limit,
+                max_per_request, change_type
+         FROM plan_limit_history
+         WHERE account_id = $1
+           AND user_id = $2
+           AND change_type = 'baseline'`,
+        [accountId, internalUserId]
+    );
+
+    assert.equal(baseline.rowCount, 1);
+    assert.equal(baseline.rows[0].plan_name, "Basic");
+    assert.equal(Number(baseline.rows[0].monthly_limit), 10);
+    assert.equal(Number(baseline.rows[0].max_per_request), 2);
+
+    // Consume 2 credits before switching plans.
+    const first = await post(
+        "/consume",
+        {
+            userId,
+            units: 2,
+            requestId: randomUUID()
+        },
+        auth
+    );
+
+    assert.equal(first.status, 200);
+    assert.equal(first.data.accepted, true);
+    assert.equal(first.data.userRemaining, "8");
+
+    // Switch from Basic (3) to Premium (4).
+    const switched = await request(
+        "PATCH",
+        "/users/plan",
+        { userId, planId: 4 },
+        auth
+    );
+
+    assert.equal(
+        switched.status,
+        200,
+        `User plan switch failed: ${JSON.stringify(switched.data)}`
+    );
+
+    // Verify the new quota limits were saved.
+    const history = await pool.query(
+        `SELECT plan_id, plan_name, monthly_limit,
+                max_per_request, change_type, effective_at
+         FROM plan_limit_history
+         WHERE account_id = $1
+           AND user_id = $2
+           AND change_type = 'user_plan_switch'
+         ORDER BY id DESC`,
+        [accountId, internalUserId]
+    );
+
+    assert.equal(history.rowCount, 1);
+
+    const event = history.rows[0];
+
+    assert.equal(Number(event.plan_id), 4);
+    assert.equal(event.plan_name, "Premium");
+    assert.equal(Number(event.monthly_limit), 100);
+    assert.equal(Number(event.max_per_request), 10);
+    assert.equal(event.change_type, "user_plan_switch");
+    assert.ok(event.effective_at);
+
+    // Switching to the same plan again must not
+    // generate another history event.
+    const repeated = await request(
+        "PATCH",
+        "/users/plan",
+        { userId, planId: 4 },
+        auth
+    );
+
+    assert.equal(repeated.status, 200);
+
+    const eventCount = await pool.query(
+        `SELECT COUNT(*) AS total
+         FROM plan_limit_history
+         WHERE account_id = $1
+           AND user_id = $2
+           AND change_type = 'user_plan_switch'`,
+        [accountId, internalUserId]
+    );
+
+    assert.equal(Number(eventCount.rows[0].total), 1);
+
+    // Consume 1 additional credit after upgrading.
+    // Premium has 100 monthly credits, and 2 were
+    // already used before the upgrade.
+    const second = await post(
+        "/consume",
+        {
+            userId,
+            units: 1,
+            requestId: randomUUID()
+        },
+        auth
+    );
+
+    assert.equal(second.status, 200);
+    assert.equal(second.data.accepted, true);
+
+    // Premium: 100 - 2 - 1 = 97.
+    assert.equal(second.data.userRemaining, "97");
+
+    // Starter account: 100 - 2 - 1 = 97.
+    assert.equal(second.data.accountRemaining, "97");
+
+    // Verify the database still stores all 3 used credits.
+    const usage = await pool.query(
+        `SELECT units_used
+         FROM monthly_usage
+         WHERE account_id = $1
+           AND user_id = $2
+           AND month_start =
+               DATE_TRUNC('month', NOW() AT TIME ZONE 'UTC')::date`,
+        [accountId, internalUserId]
+    );
+
+    assert.equal(usage.rowCount, 1);
+    assert.equal(Number(usage.rows[0].units_used), 3);
 });
