@@ -1,4 +1,6 @@
 
+import "dotenv/config";
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -34,6 +36,61 @@ async function post(
     return request("POST", path, body, headers);
 }
 
+function getAdminKey(): string {
+    const adminKey = process.env.ADMIN_API_KEY;
+    assert.ok(adminKey, "ADMIN_API_KEY is required");
+    return adminKey;
+}
+
+async function createTestAccount(name: string) {
+    const result = await post(
+        "/accounts",
+        {
+            name: `${name} ${randomUUID()}`,
+            planId: 1
+        },
+        { "X-Admin-Key": getAdminKey() }
+    );
+
+    assert.equal(
+        result.status,
+        201,
+        `Account creation failed: ${JSON.stringify(result.data)}`
+    );
+
+    return result.data;
+}
+
+async function createCustomPlan(
+    apiKey: string,
+    planType: "account" | "user",
+    monthlyLimit: number,
+    maxPerRequest: number
+) {
+    const result = await post(
+        "/plans",
+        {
+            name: `Custom Plan ${randomUUID()}`,
+            planType,
+            monthlyLimit,
+            maxPerRequest
+        },
+        { "X-API-Key": apiKey }
+    );
+
+    assert.equal(
+        result.status,
+        201,
+        `Plan creation failed: ${JSON.stringify(result.data)}`
+    );
+
+    return result.data.plan;
+}
+
+// ------------------------------------------------------------
+// TEST 1: Missing API key
+// ------------------------------------------------------------
+
 test("Rejects consumption without an API key", async () => {
     const result = await post("/consume", {
         userId: "testuser",
@@ -44,6 +101,10 @@ test("Rejects consumption without an API key", async () => {
     assert.equal(result.status, 401);
     assert.equal(result.data.error, "Missing or invalid API key");
 });
+
+// ------------------------------------------------------------
+// TEST 2: Invalid API key
+// ------------------------------------------------------------
 
 test("Rejects consumption with an invalid API key", async () => {
     const result = await post(
@@ -60,22 +121,23 @@ test("Rejects consumption with an invalid API key", async () => {
     assert.equal(result.data.error, "Invalid API key");
 });
 
-test("Prevents one account from accessing another account's user", async () => {
-    const adminKey = process.env.ADMIN_API_KEY;
-    assert.ok(adminKey, "ADMIN_API_KEY is required");
+// ------------------------------------------------------------
+// TEST 3: Account isolation
+// ------------------------------------------------------------
 
+test("Prevents one account from accessing another account's user", async () => {
     const uniqueId = randomUUID();
 
     const accountA = await post(
         "/accounts",
         { name: `Test A ${uniqueId}`, planId: 1 },
-        { "X-Admin-Key": adminKey }
+        { "X-Admin-Key": getAdminKey() }
     );
 
     const accountB = await post(
         "/accounts",
         { name: `Test B ${uniqueId}`, planId: 1 },
-        { "X-Admin-Key": adminKey }
+        { "X-Admin-Key": getAdminKey() }
     );
 
     assert.equal(accountA.status, 201);
@@ -105,16 +167,17 @@ test("Prevents one account from accessing another account's user", async () => {
     assert.equal(result.data.error, "User not found in account");
 });
 
-test("Rejects consumption when user monthly credits are exhausted", async () => {
-    const adminKey = process.env.ADMIN_API_KEY;
-    assert.ok(adminKey, "ADMIN_API_KEY is required");
+// ------------------------------------------------------------
+// TEST 4: Monthly user quota
+// ------------------------------------------------------------
 
+test("Rejects consumption when user monthly credits are exhausted", async () => {
     const uniqueId = randomUUID();
 
     const account = await post(
         "/accounts",
         { name: `Limit Test ${uniqueId}`, planId: 1 },
-        { "X-Admin-Key": adminKey }
+        { "X-Admin-Key": getAdminKey() }
     );
 
     assert.equal(account.status, 201);
@@ -130,7 +193,7 @@ test("Rejects consumption when user monthly credits are exhausted", async () => 
 
     assert.equal(user.status, 201);
 
-    // Basic plan: 10 monthly credits, maximum 2 per request.
+    // Basic: 10 monthly credits, maximum 2 per request.
     for (let i = 0; i < 5; i++) {
         const result = await post(
             "/consume",
@@ -163,16 +226,17 @@ test("Rejects consumption when user monthly credits are exhausted", async () => 
     assert.equal(rejected.data.userRemaining, "0");
 });
 
-test("Does not double-charge repeated requests", async () => {
-    const adminKey = process.env.ADMIN_API_KEY;
-    assert.ok(adminKey, "ADMIN_API_KEY is required");
+// ------------------------------------------------------------
+// TEST 5: Idempotency
+// ------------------------------------------------------------
 
+test("Does not double-charge repeated requests", async () => {
     const uniqueId = randomUUID();
 
     const account = await post(
         "/accounts",
         { name: `Idempotency Test ${uniqueId}`, planId: 1 },
-        { "X-Admin-Key": adminKey }
+        { "X-Admin-Key": getAdminKey() }
     );
 
     assert.equal(account.status, 201);
@@ -188,7 +252,6 @@ test("Does not double-charge repeated requests", async () => {
 
     assert.equal(user.status, 201);
 
-    // First request consumes 2 credits.
     const repeatedRequest = {
         userId,
         units: 2,
@@ -201,7 +264,6 @@ test("Does not double-charge repeated requests", async () => {
         { "X-API-Key": apiKey }
     );
 
-    // Repeating the same request must not deduct more credits.
     const second = await post(
         "/consume",
         repeatedRequest,
@@ -215,7 +277,6 @@ test("Does not double-charge repeated requests", async () => {
     assert.equal(second.data.accepted, true);
     assert.equal(second.data.replayed, true);
 
-    // Consume 1 more credit to verify the actual balance.
     const third = await post(
         "/consume",
         {
@@ -233,17 +294,17 @@ test("Does not double-charge repeated requests", async () => {
     assert.equal(third.data.userRemaining, "7");
 });
 
-test("Prevents concurrent requests from exceeding account quota", async () => {
-    const adminKey = process.env.ADMIN_API_KEY;
-    assert.ok(adminKey, "ADMIN_API_KEY is required");
+// ------------------------------------------------------------
+// TEST 6: Concurrency safety
+// ------------------------------------------------------------
 
+test("Prevents concurrent requests from exceeding account quota", async () => {
     const uniqueId = randomUUID();
 
-    // Step 1: Create a new account.
     const account = await post(
         "/accounts",
         { name: `Concurrency Test ${uniqueId}`, planId: 1 },
-        { "X-Admin-Key": adminKey }
+        { "X-Admin-Key": getAdminKey() }
     );
 
     assert.equal(account.status, 201);
@@ -251,7 +312,6 @@ test("Prevents concurrent requests from exceeding account quota", async () => {
     const apiKey = account.data.apiKey;
     const auth = { "X-API-Key": apiKey };
 
-    // Step 2: Create a custom plan with only 2 monthly credits.
     const customPlan = await post(
         "/plans",
         {
@@ -265,9 +325,6 @@ test("Prevents concurrent requests from exceeding account quota", async () => {
 
     assert.equal(customPlan.status, 201);
 
-    // Step 3: Switch the account to the custom plan.
-    // PostgreSQL may return an ID as a string.
-    // Number() converts it into the integer expected by the API.
     const planId = Number(customPlan.data.plan.id);
 
     assert.ok(Number.isSafeInteger(planId) && planId > 0);
@@ -285,7 +342,6 @@ test("Prevents concurrent requests from exceeding account quota", async () => {
         `Plan switch failed: ${JSON.stringify(planSwitch.data)}`
     );
 
-    // Step 4: Create a Basic user with 10 personal credits.
     const userId = `concurrent-user-${uniqueId}`;
 
     const user = await post(
@@ -296,8 +352,6 @@ test("Prevents concurrent requests from exceeding account quota", async () => {
 
     assert.equal(user.status, 201);
 
-    // Step 5: Send two requests at the same time.
-    // Each requests the entire remaining account balance.
     const [first, second] = await Promise.all([
         post(
             "/consume",
@@ -324,14 +378,172 @@ test("Prevents concurrent requests from exceeding account quota", async () => {
         result => result.accepted === false
     );
 
-    // Exactly one request must succeed.
     assert.equal(accepted.length, 1);
     assert.equal(rejected.length, 1);
 
-    // The rejected request must identify the account quota.
     assert.equal(rejected[0].scope, "account");
     assert.equal(rejected[0].rule, "monthly_limit");
-
-    // The accepted request consumed all 2 account credits.
     assert.equal(rejected[0].accountRemaining, "0");
+});
+
+// ------------------------------------------------------------
+// TEST 7: Updating an owned custom plan preserves usage
+// ------------------------------------------------------------
+
+test("Updates an owned custom plan without resetting consumed credits", async () => {
+    const account = await createTestAccount("Plan Update Test");
+    const auth = { "X-API-Key": account.apiKey };
+
+    // Initially, the account plan allows 5 credits monthly.
+    const customPlan = await createCustomPlan(
+        account.apiKey,
+        "account",
+        5,
+        2
+    );
+
+    const planId = Number(customPlan.id);
+
+    assert.ok(Number.isSafeInteger(planId) && planId > 0);
+
+    const switched = await request(
+        "PATCH",
+        "/accounts/plan",
+        { planId },
+        auth
+    );
+
+    assert.equal(switched.status, 200);
+
+    // Basic user: 10 monthly credits, maximum 2 per request.
+    const userId = `update-user-${randomUUID()}`;
+
+    const user = await post(
+        "/users",
+        { userId, planId: 3 },
+        auth
+    );
+
+    assert.equal(user.status, 201);
+
+    // Consume 2 credits before changing the account plan.
+    const firstConsumption = await post(
+        "/consume",
+        {
+            userId,
+            units: 2,
+            requestId: randomUUID()
+        },
+        auth
+    );
+
+    assert.equal(firstConsumption.status, 200);
+    assert.equal(firstConsumption.data.accepted, true);
+    assert.equal(firstConsumption.data.accountRemaining, "3");
+
+    // Update the account plan's monthly and per-request limits.
+    const updated = await request(
+        "PATCH",
+        `/plans/${planId}`,
+        {
+            name: "Expanded Test Plan",
+            monthlyLimit: 10,
+            maxPerRequest: 3
+        },
+        auth
+    );
+
+    assert.equal(
+        updated.status,
+        200,
+        `Plan update failed: ${JSON.stringify(updated.data)}`
+    );
+
+    assert.equal(updated.data.plan.name, "Expanded Test Plan");
+    assert.equal(Number(updated.data.plan.monthly_limit), 10);
+    assert.equal(Number(updated.data.plan.max_per_request), 3);
+
+    // Both account and user per-request limits apply.
+    // The Basic user's maximum remains 2 credits per request.
+    const secondConsumption = await post(
+        "/consume",
+        {
+            userId,
+            units: 2,
+            requestId: randomUUID()
+        },
+        auth
+    );
+
+    assert.equal(secondConsumption.status, 200);
+    assert.equal(
+        secondConsumption.data.accepted,
+        true,
+        `Unexpected rejection: ${JSON.stringify(secondConsumption.data)}`
+    );
+
+    // Total usage is 2 + 2 = 4 credits.
+    // Updated account limit: 10, so 6 remain.
+    assert.equal(secondConsumption.data.accountRemaining, "6");
+
+    // Basic user limit: 10, with 4 used, so 6 remain.
+    assert.equal(secondConsumption.data.userRemaining, "6");
+});
+
+// ------------------------------------------------------------
+// TEST 8: Custom-plan ownership
+// ------------------------------------------------------------
+
+test("Prevents an account from updating another account's custom plan", async () => {
+    const owner = await createTestAccount("Plan Owner");
+    const otherAccount = await createTestAccount("Other Account");
+
+    const customPlan = await createCustomPlan(
+        owner.apiKey,
+        "account",
+        20,
+        5
+    );
+
+    const planId = Number(customPlan.id);
+
+    const attemptedUpdate = await request(
+        "PATCH",
+        `/plans/${planId}`,
+        { monthlyLimit: 999 },
+        { "X-API-Key": otherAccount.apiKey }
+    );
+
+    assert.equal(attemptedUpdate.status, 404);
+
+    const ownerUpdate = await request(
+        "PATCH",
+        `/plans/${planId}`,
+        { monthlyLimit: 25 },
+        { "X-API-Key": owner.apiKey }
+    );
+
+    assert.equal(ownerUpdate.status, 200);
+    assert.equal(Number(ownerUpdate.data.plan.monthly_limit), 25);
+});
+
+// ------------------------------------------------------------
+// TEST 9: Predefined plans cannot be modified
+// ------------------------------------------------------------
+
+test("Prevents modification of predefined system plans", async () => {
+    const account = await createTestAccount("System Plan Protection");
+
+    // Plan 1 is the predefined Starter account plan.
+    const result = await request(
+        "PATCH",
+        "/plans/1",
+        {
+            name: "Modified Starter",
+            monthlyLimit: 999999
+        },
+        { "X-API-Key": account.apiKey }
+    );
+
+    assert.equal(result.status, 404);
 });
