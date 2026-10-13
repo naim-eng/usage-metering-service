@@ -1,3 +1,4 @@
+
 {
   "name": "usage-metering-service",
   "version": "1.0.0",
@@ -5,7 +6,9 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/test-quota.ts"
+    "test": "npm run test:unit && npm run test:integration",
+    "test:unit": "tsx --test src/test-quota.ts",
+    "test:integration": "tsx --test src/integration.test.ts"
   },
   "keywords": [],
   "author": "",
