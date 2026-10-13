@@ -1,23 +1,51 @@
-
+import { test } from "node:test";
+import assert from "node:assert/strict";
 import { checkQuota } from "./consume.js";
 
-function runTest(
-    name: string,
-    units: bigint,
-    accountRemaining: bigint,
-    userRemaining: bigint
-) {
-    const result = checkQuota(
-        units,
-        accountRemaining,
-        userRemaining,
-        20n, // Account maximum per request
-        2n   // Ahmed's maximum per request
-    );
+test("Accepts a request within both limits", () => {
+    const result = checkQuota(2n, 100n, 10n, 20n, 2n);
 
-    console.log(name, result);
-}
+    assert.deepEqual(result, {
+        accepted: true
+    });
+});
 
-runTest("Test 1: Valid request", 2n, 100n, 10n);
-runTest("Test 2: User request limit", 3n, 100n, 10n);
-runTest("Test 3: Account monthly limit", 2n, 1n, 10n);
+test("Rejects requests exceeding the user's per-request limit", () => {
+    const result = checkQuota(3n, 100n, 10n, 20n, 2n);
+
+    assert.deepEqual(result, {
+        accepted: false,
+        scope: "user",
+        rule: "max_per_request"
+    });
+});
+
+test("Rejects requests exceeding the account's monthly limit", () => {
+    const result = checkQuota(2n, 1n, 10n, 20n, 2n);
+
+    assert.deepEqual(result, {
+        accepted: false,
+        scope: "account",
+        rule: "monthly_limit"
+    });
+});
+
+test("Rejects requests exceeding the user's monthly limit", () => {
+    const result = checkQuota(2n, 100n, 1n, 20n, 10n);
+
+    assert.deepEqual(result, {
+        accepted: false,
+        scope: "user",
+        rule: "monthly_limit"
+    });
+});
+
+test("Rejects requests exceeding the account's per-request limit", () => {
+    const result = checkQuota(6n, 100n, 100n, 5n, 10n);
+
+    assert.deepEqual(result, {
+        accepted: false,
+        scope: "account",
+        rule: "max_per_request"
+    });
+});
