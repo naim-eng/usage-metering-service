@@ -5,6 +5,41 @@ import { authenticateAccount } from "./auth.js";
 
 export const plansRouter = Router();
 
+//
+// LIST custom plans owned by the authenticated account.
+//
+
+plansRouter.get("/custom", authenticateAccount, async (_req, res) => {
+    const accountId = res.locals.account.id;
+
+    try {
+        const result = await pool.query(
+            `SELECT
+                id,
+                name,
+                plan_type,
+                monthly_limit,
+                max_per_request,
+                created_at
+             FROM plans
+             WHERE owner_account_id = $1
+             ORDER BY id`,
+            [accountId]
+        );
+
+        res.status(200).json({
+            plans: result.rows
+        });
+    } catch (error) {
+        console.error("Custom plan listing failed:", error);
+
+        res.status(500).json({
+            error: "Failed to retrieve custom plans"
+        });
+    }
+});
+
+
 // Create a custom account or user plan.
 plansRouter.post("/", authenticateAccount, async (req, res) => {
     const accountId = res.locals.account.id;

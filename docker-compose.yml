@@ -36,5 +36,58 @@ services:
       db:
         condition: service_healthy
 
+  demo-db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: metering
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: usage_metering_demo
+    volumes:
+      - demo_postgres_data:/var/lib/postgresql/data
+      - ./sql/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_initial_schema.sql:ro
+      - ./sql/002_seed_plans.sql:/docker-entrypoint-initdb.d/002_seed_plans.sql:ro
+      - ./sql/003_plan_history.sql:/docker-entrypoint-initdb.d/003_plan_history.sql:ro
+      - ./sql/004_idempotency_balances.sql:/docker-entrypoint-initdb.d/004_idempotency_balances.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metering -d usage_metering_demo"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  demo-api:
+    build: .
+    environment:
+      DB_HOST: demo-db
+      DB_PORT: 5432
+      DB_USER: metering
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: usage_metering_demo
+      PORT: 3000
+      ADMIN_API_KEY: ${ADMIN_API_KEY}
+    depends_on:
+      demo-db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  demo-client:
+    build: .
+    command: ["npx", "tsx", "examples/demo-client.ts"]
+    environment:
+      API_BASE_URL: http://demo-api:3000
+      ADMIN_API_KEY: ${ADMIN_API_KEY}
+    depends_on:
+      demo-api:
+        condition: service_healthy
+
 volumes:
   postgres_data:
+  demo_postgres_data:

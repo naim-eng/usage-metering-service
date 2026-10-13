@@ -2,32 +2,45 @@
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
 
-// Default to the isolated test API on port 3001.
-// A different URL can be supplied through API_BASE_URL.
+// Only use the isolated test API.
+// Never run this demonstration against the main API.
 const BASE_URL =
     process.env.API_BASE_URL ?? "http://localhost:3001";
 
-// Prevent accidental execution against the main API.
 const target = new URL(BASE_URL);
+const isLocalTestApi =
+    ["localhost", "127.0.0.1"].includes(target.hostname) &&
+    target.port === "3001";
+
+const isDockerDemoApi =
+    target.hostname === "demo-api" &&
+    target.port === "3000";
 
 if (
-    !["localhost", "127.0.0.1"].includes(target.hostname) ||
-    target.port !== "3001"
+    target.protocol !== "http:" ||
+    !(isLocalTestApi || isDockerDemoApi)
 ) {
     throw new Error(
-        "Demo client must use the isolated test API on localhost:3001"
+        "Demo must use localhost:3001 or the isolated Docker demo-api:3000"
     );
 }
+
+type ApiResult = {
+    status: number;
+    data: any;
+};
 
 async function sendRequest(
     method: string,
     path: string,
-    body: object,
+    body?: object,
     apiKey?: string
-) {
-    const headers: Record<string, string> = {
-        "Content-Type": "application/json"
-    };
+): Promise<ApiResult> {
+    const headers: Record<string, string> = {};
+
+    if (body !== undefined) {
+        headers["Content-Type"] = "application/json";
+    }
 
     if (apiKey) {
         headers["X-API-Key"] = apiKey;
@@ -36,13 +49,29 @@ async function sendRequest(
     const response = await fetch(`${BASE_URL}${path}`, {
         method,
         headers,
-        body: JSON.stringify(body)
+        ...(body !== undefined
+            ? { body: JSON.stringify(body) }
+            : {})
     });
 
     return {
         status: response.status,
-        data: await response.json() as any
+        data: await response.json()
     };
+}
+
+function assertResponse(
+    condition: boolean,
+    message: string,
+    data?: unknown
+): void {
+    if (!condition) {
+        throw new Error(
+            `${message}${data === undefined
+                ? ""
+                : `: ${JSON.stringify(data)}`}`
+        );
+    }
 }
 
 async function main() {
@@ -57,10 +86,27 @@ async function main() {
 
     const demoId = randomUUID();
 
-    console.log("Demo ID:", demoId);
+    // 1. Create a fresh account on the Starter plan.
+    const accountResponse = await sendRequest(
+        "POST",
+        "/accounts",
+        {
+            name: `Demo Account ${demoId}`,
+            planId: 1
+        }
+    );
 
-    // 1. Create an account with the Starter plan.
-    const accountResponse = await fetch(`${BASE_URL}/accounts`, {
+    // Account creation requires the separate admin key.
+    // The request above has no API key, so send it with
+    // the administrative authentication header instead.
+    // This request is intentionally handled below.
+    assertResponse(
+        accountResponse.status === 401,
+        "Account creation must require admin authentication",
+        accountResponse.data
+    );
+
+    const createdResponse = await fetch(`${BASE_URL}/accounts`, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
@@ -72,25 +118,21 @@ async function main() {
         })
     });
 
-    const accountResult = await accountResponse.json() as any;
+    const createdAccount = await createdResponse.json() as any;
 
-    if (accountResponse.status !== 201) {
-        throw new Error(
-            `Account creation failed: ${JSON.stringify(accountResult)}`
-        );
-    }
+    assertResponse(
+        createdResponse.status === 201 &&
+            typeof createdAccount.apiKey === "string",
+        "Account creation failed",
+        createdAccount
+    );
 
-    const apiKey = accountResult.apiKey;
+    const apiKey: string = createdAccount.apiKey;
 
-    if (typeof apiKey !== "string") {
-        throw new Error("Account API key was not returned");
-    }
+    console.log("\nAccount created:", createdAccount.account.id);
 
-    console.log("\nAccount created:", accountResult.account.id);
-    console.log("Initial plan: Starter (100 credits/month)");
-
-    // 2. Create a custom account plan.
-    const customPlan = await sendRequest(
+    // 2. Create and assign a custom account plan.
+    const custom = await sendRequest(
         "POST",
         "/plans",
         {
@@ -102,51 +144,120 @@ async function main() {
         apiKey
     );
 
-    if (customPlan.status !== 201) {
-        throw new Error(
-            `Custom plan creation failed: ${JSON.stringify(customPlan.data)}`
-        );
-    }
+    assertResponse(
+        custom.status === 201,
+        "Custom plan creation failed",
+        custom.data
+    );
 
-    // 3. Assign the custom plan to the account.
-    const customPlanId = Number(customPlan.data.plan.id);
+    const customPlanId = Number(custom.data.plan.id);
 
-    const initialPlanSwitch = await sendRequest(
+    const switched = await sendRequest(
         "PATCH",
         "/accounts/plan",
         { planId: customPlanId },
         apiKey
     );
 
-    if (initialPlanSwitch.status !== 200) {
-        throw new Error(
-            `Plan switching failed: ${JSON.stringify(initialPlanSwitch.data)}`
-        );
-    }
+    assertResponse(
+        switched.status === 200,
+        "Custom account plan assignment failed",
+        switched.data
+    );
 
-    console.log("New plan: Small Business (5 shared credits/month)");
+    // 3. Register users with DIFFERENT plans.
+    // Ahmed: Premium (100 monthly, 10 per request).
+    // Sara: Basic (10 monthly, 2 per request).
+    const users = [
+        { userId: "ahmed", planId: 4 },
+        { userId: "sara", planId: 3 }
+    ];
 
-    // 4. Create two users with Premium plans.
-    for (const userId of ["ahmed", "sara"]) {
+    for (const user of users) {
         const result = await sendRequest(
             "POST",
             "/users",
-            { userId, planId: 4 },
+            user,
             apiKey
         );
 
-        if (result.status !== 201) {
-            throw new Error(
-                `Failed to create ${userId}: ${JSON.stringify(result.data)}`
-            );
-        }
-
-        console.log(
-            `${userId} created: Premium (100 credits/month)`
+        assertResponse(
+            result.status === 201,
+            `Failed to register ${user.userId}`,
+            result.data
         );
     }
 
-    // 5. Ahmed consumes 2 credits.
+    console.log("Ahmed: Premium plan");
+    console.log("Sara: Basic plan");
+
+    // 4. Inspect account and user allowances.
+    const accountInfo = await sendRequest(
+        "GET",
+        "/account",
+        undefined,
+        apiKey
+    );
+
+    assertResponse(
+        accountInfo.status === 200 &&
+            Number(accountInfo.data.account.monthly_limit) === 5 &&
+            Number(accountInfo.data.account.units_remaining) === 5,
+        "Initial account allowance is incorrect",
+        accountInfo.data
+    );
+
+    const userInfo = await sendRequest(
+        "GET",
+        "/users",
+        undefined,
+        apiKey
+    );
+
+    assertResponse(
+        userInfo.status === 200,
+        "User allowance lookup failed",
+        userInfo.data
+    );
+
+    const ahmedInfo = userInfo.data.users.find(
+        (user: any) => user.user_id === "ahmed"
+    );
+
+    const saraInfo = userInfo.data.users.find(
+        (user: any) => user.user_id === "sara"
+    );
+
+    assertResponse(
+        ahmedInfo?.plan_name === "Premium" &&
+            Number(ahmedInfo.units_remaining) === 100 &&
+            saraInfo?.plan_name === "Basic" &&
+            Number(saraInfo.units_remaining) === 10,
+        "User plan inspection failed",
+        userInfo.data
+    );
+
+    // 5. Inspect custom plans.
+    const customPlans = await sendRequest(
+        "GET",
+        "/plans/custom",
+        undefined,
+        apiKey
+    );
+
+    assertResponse(
+        customPlans.status === 200 &&
+            customPlans.data.plans.some(
+                (plan: any) =>
+                    String(plan.id) === String(customPlanId)
+            ),
+        "Custom plan listing failed",
+        customPlans.data
+    );
+
+    console.log("PASS: Plan and allowance inspection.");
+
+    // 6. Ahmed consumes 2 credits.
     const ahmedRequest = {
         userId: "ahmed",
         units: 2,
@@ -160,17 +271,16 @@ async function main() {
         apiKey
     );
 
-    if (ahmed.status !== 200 || ahmed.data.accepted !== true) {
-        throw new Error(
-            `Ahmed's request failed: ${JSON.stringify(ahmed.data)}`
-        );
-    }
+    assertResponse(
+        ahmed.status === 200 &&
+            ahmed.data.accepted === true &&
+            ahmed.data.accountRemaining === "3" &&
+            ahmed.data.userRemaining === "98",
+        "Ahmed consumption failed",
+        ahmed.data
+    );
 
-    console.log("\nAhmed consumes 2 credits: ACCEPTED");
-    console.log("Shared remaining:", ahmed.data.accountRemaining);
-    console.log("Ahmed remaining:", ahmed.data.userRemaining);
-
-    // 6. Sara consumes 2 credits.
+    // 7. Sara consumes 2 credits.
     const sara = await sendRequest(
         "POST",
         "/consume",
@@ -182,75 +292,63 @@ async function main() {
         apiKey
     );
 
-    if (sara.status !== 200 || sara.data.accepted !== true) {
-        throw new Error(
-            `Sara's request failed: ${JSON.stringify(sara.data)}`
-        );
-    }
+    assertResponse(
+        sara.status === 200 &&
+            sara.data.accepted === true &&
+            sara.data.accountRemaining === "1" &&
+            sara.data.userRemaining === "8",
+        "Sara consumption failed",
+        sara.data
+    );
 
-    console.log("\nSara consumes 2 credits: ACCEPTED");
-    console.log("Shared remaining:", sara.data.accountRemaining);
-    console.log("Sara remaining:", sara.data.userRemaining);
+    console.log("PASS: Two users with different plans consume credits.");
 
-    // 7. Demonstrate a user-level rejection.
+    // 8. Sara exceeds her per-request limit of 2.
     const userRejected = await sendRequest(
         "POST",
         "/consume",
         {
-            userId: "ahmed",
-            units: 11,
+            userId: "sara",
+            units: 3,
             requestId: randomUUID()
         },
         apiKey
     );
 
-    if (
-        userRejected.status !== 200 ||
-        userRejected.data.accepted !== false ||
-        userRejected.data.scope !== "user" ||
-        userRejected.data.rule !== "max_per_request"
-    ) {
-        throw new Error(
-            `Unexpected user rejection: ${JSON.stringify(userRejected.data)}`
-        );
-    }
+    assertResponse(
+        userRejected.status === 200 &&
+            userRejected.data.accepted === false &&
+            userRejected.data.scope === "user" &&
+            userRejected.data.rule === "max_per_request",
+        "User-level rejection failed",
+        userRejected.data
+    );
 
-    console.log("\nAhmed requests 11 credits: REJECTED");
-    console.log("Scope:", userRejected.data.scope);
-    console.log("Rule:", userRejected.data.rule);
-
-    // 8. Demonstrate an account-level rejection.
+    // 9. Ahmed requests more than the shared balance.
     const accountRejected = await sendRequest(
         "POST",
         "/consume",
         {
-            userId: "sara",
+            userId: "ahmed",
             units: 2,
             requestId: randomUUID()
         },
         apiKey
     );
 
-    if (
-        accountRejected.status !== 200 ||
-        accountRejected.data.accepted !== false ||
-        accountRejected.data.scope !== "account" ||
-        accountRejected.data.rule !== "monthly_limit" ||
-        Number(accountRejected.data.accountRemaining) !== 1 ||
-        Number(accountRejected.data.userRemaining) !== 98
-    ) {
-        throw new Error(
-            `Unexpected account rejection: ${JSON.stringify(accountRejected.data)}`
-        );
-    }
+    assertResponse(
+        accountRejected.status === 200 &&
+            accountRejected.data.accepted === false &&
+            accountRejected.data.scope === "account" &&
+            accountRejected.data.rule === "monthly_limit" &&
+            accountRejected.data.accountRemaining === "1",
+        "Account-level rejection failed",
+        accountRejected.data
+    );
 
-    console.log("\nSara requests 2 more credits: REJECTED");
-    console.log("Scope:", accountRejected.data.scope);
-    console.log("Rule:", accountRejected.data.rule);
-    console.log("Shared remaining:", accountRejected.data.accountRemaining);
-    console.log("Sara remaining:", accountRejected.data.userRemaining);
+    console.log("PASS: Account and user quota rejections.");
 
-    // 9. Retry Ahmed's original request.
+    // 10. Replay Ahmed's original request.
     const retry = await sendRequest(
         "POST",
         "/consume",
@@ -258,26 +356,20 @@ async function main() {
         apiKey
     );
 
-    if (
-        retry.status !== 200 ||
-        retry.data.accepted !== true ||
-        retry.data.replayed !== true ||
-        retry.data.accountRemaining !== ahmed.data.accountRemaining ||
-        retry.data.userRemaining !== ahmed.data.userRemaining
-    ) {
-        throw new Error(
-            `Idempotency check failed: ${JSON.stringify(retry.data)}`
-        );
-    }
+    assertResponse(
+        retry.status === 200 &&
+            retry.data.accepted === true &&
+            retry.data.replayed === true &&
+            retry.data.accountRemaining === ahmed.data.accountRemaining &&
+            retry.data.userRemaining === ahmed.data.userRemaining,
+        "Idempotent replay failed",
+        retry.data
+    );
 
-    console.log("\nRetrying Ahmed's original request...");
-    console.log("Duplicate recognized:", retry.data.replayed);
-    console.log("Original shared remaining:", retry.data.accountRemaining);
-    console.log("Original Ahmed remaining:", retry.data.userRemaining);
-    console.log("Additional credits charged: 0");
+    console.log("PASS: Idempotent retries preserve original balances.");
 
-    // 10. Consume the final shared credit.
-    const finalRequest = await sendRequest(
+    // 11. Consume the final shared credit.
+    const final = await sendRequest(
         "POST",
         "/consume",
         {
@@ -288,23 +380,16 @@ async function main() {
         apiKey
     );
 
-    if (
-        finalRequest.status !== 200 ||
-        finalRequest.data.accepted !== true ||
-        Number(finalRequest.data.accountRemaining) !== 0 ||
-        Number(finalRequest.data.userRemaining) !== 97
-    ) {
-        throw new Error(
-            `Final balance verification failed: ${JSON.stringify(finalRequest.data)}`
-        );
-    }
+    assertResponse(
+        final.status === 200 &&
+            final.data.accepted === true &&
+            final.data.accountRemaining === "0" &&
+            final.data.userRemaining === "97",
+        "Final shared credit consumption failed",
+        final.data
+    );
 
-    console.log("\nAccount quota exhausted.");
-    console.log("Shared remaining:", finalRequest.data.accountRemaining);
-    console.log("Ahmed remaining:", finalRequest.data.userRemaining);
-    console.log("Sara remaining: 98");
-
-    // 11. Upgrade the account back to Starter.
+    // 12. Upgrade to the predefined Starter account plan.
     const upgrade = await sendRequest(
         "PATCH",
         "/accounts/plan",
@@ -312,17 +397,13 @@ async function main() {
         apiKey
     );
 
-    if (upgrade.status !== 200) {
-        throw new Error(
-            `Account upgrade failed: ${JSON.stringify(upgrade.data)}`
-        );
-    }
+    assertResponse(
+        upgrade.status === 200,
+        "Account upgrade failed",
+        upgrade.data
+    );
 
-    console.log("\nAccount upgraded to Starter.");
-    console.log("New monthly limit: 100");
-    console.log("Credits already consumed: 5");
-
-    // 12. Verify that usage survives the plan upgrade.
+    // 13. Sara consumes another credit after the upgrade.
     const afterUpgrade = await sendRequest(
         "POST",
         "/consume",
@@ -334,30 +415,39 @@ async function main() {
         apiKey
     );
 
-    if (
-        afterUpgrade.status !== 200 ||
-        afterUpgrade.data.accepted !== true ||
-        Number(afterUpgrade.data.accountRemaining) !== 94 ||
-        Number(afterUpgrade.data.userRemaining) !== 97
-    ) {
-        throw new Error(
-            `Upgrade verification failed: ${JSON.stringify(afterUpgrade.data)}`
-        );
-    }
+    assertResponse(
+        afterUpgrade.status === 200 &&
+            afterUpgrade.data.accepted === true &&
+            afterUpgrade.data.accountRemaining === "94" &&
+            afterUpgrade.data.userRemaining === "7",
+        "Usage was not preserved across the account upgrade",
+        afterUpgrade.data
+    );
 
-    console.log("\nSara consumes 1 credit after upgrade: ACCEPTED");
-    console.log("Shared remaining:", afterUpgrade.data.accountRemaining);
-    console.log("Sara remaining:", afterUpgrade.data.userRemaining);
+    // 14. Confirm final allowance inspection.
+    const finalAccount = await sendRequest(
+        "GET",
+        "/account",
+        undefined,
+        apiKey
+    );
 
-    console.log("\nPASS: User and account quotas enforced.");
-    console.log("PASS: Rejected requests consumed zero credits.");
-    console.log("PASS: Duplicate requests were not double-charged.");
-    console.log("PASS: Retries returned original credit balances.");
-    console.log("PASS: Account upgrade preserved previous usage.");
-    console.log("Demo completed successfully!");
+    assertResponse(
+        finalAccount.status === 200 &&
+            finalAccount.data.account.plan_name === "Starter" &&
+            Number(finalAccount.data.account.units_used) === 6 &&
+            Number(finalAccount.data.account.units_remaining) === 94,
+        "Final account allowance inspection failed",
+        finalAccount.data
+    );
+
+    console.log("PASS: Plan upgrades preserve consumed credits.");
+    console.log("PASS: Final usage and remaining allowances.");
+
+    console.log("\nDemo completed successfully!");
 }
 
-main().catch(error => {
+main().catch((error) => {
     console.error(error);
     process.exitCode = 1;
 });

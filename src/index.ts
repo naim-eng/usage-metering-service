@@ -1,3 +1,4 @@
+import { allowancesRouter } from "./allowances.js";
 import { reportsRouter } from "./reports.js";
 import { historyRouter } from "./history.js";
 import { plansRouter } from "./plans.js";
@@ -308,7 +309,7 @@ app.post("/consume", authenticateAccount, async (req, res) => {
 app.use("/plans", plansRouter);
 app.use("/usage", historyRouter);
 app.use("/usage", reportsRouter);
-
+app.use("/", allowancesRouter);
 // Change an account plan and record its new quota limits.
 app.patch("/accounts/plan", authenticateAccount, async (req, res) => {
     const accountId = res.locals.account.id;

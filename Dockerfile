@@ -1,3 +1,4 @@
+
 FROM node:20-bookworm-slim
 
 WORKDIR /app
@@ -8,6 +9,7 @@ RUN npm ci
 
 COPY tsconfig.json ./
 COPY src ./src
+COPY examples ./examples
 
 EXPOSE 3000
 

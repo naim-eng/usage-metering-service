@@ -1645,3 +1645,228 @@ test("Idempotent retries preserve original balances and reject conflicts", async
 
     assert.equal(Number(usage.rows[0].units_used), 4);
 });
+
+//
+// TEST 22: Account allowance inspection
+//
+
+test("Account inspection returns current plan and remaining credits", async () => {
+    const account = await createTestAccount("Allowance Account Test");
+    const auth = { "X-API-Key": account.apiKey };
+
+    const userId = `allowance-account-${randomUUID()}`;
+
+    const created = await post(
+        "/users",
+        { userId, planId: 3 },
+        auth
+    );
+
+    assert.equal(created.status, 201);
+
+    const initial = await request(
+        "GET",
+        "/account",
+        undefined,
+        auth
+    );
+
+    assert.equal(initial.status, 200);
+    assert.equal(initial.data.account.plan_name, "Starter");
+    assert.equal(Number(initial.data.account.monthly_limit), 100);
+    assert.equal(Number(initial.data.account.units_used), 0);
+    assert.equal(Number(initial.data.account.units_remaining), 100);
+
+    const consumed = await post(
+        "/consume",
+        {
+            userId,
+            units: 2,
+            requestId: randomUUID()
+        },
+        auth
+    );
+
+    assert.equal(consumed.status, 200);
+    assert.equal(consumed.data.accepted, true);
+
+    const updated = await request(
+        "GET",
+        "/account",
+        undefined,
+        auth
+    );
+
+    assert.equal(updated.status, 200);
+    assert.equal(Number(updated.data.account.units_used), 2);
+    assert.equal(Number(updated.data.account.units_remaining), 98);
+
+    const unauthorized = await request(
+        "GET",
+        "/account"
+    );
+
+    assert.equal(unauthorized.status, 401);
+});
+
+//
+// TEST 23: User allowance inspection and isolation
+//
+
+test("User inspection returns individual plans and account-isolated usage", async () => {
+    const account = await createTestAccount("Allowance Users Test");
+    const otherAccount = await createTestAccount("Allowance Users Other");
+
+    const auth = { "X-API-Key": account.apiKey };
+
+    const basicUser = `basic-allowance-${randomUUID()}`;
+    const premiumUser = `premium-allowance-${randomUUID()}`;
+
+    for (const [userId, planId] of [
+        [basicUser, 3],
+        [premiumUser, 4]
+    ] as const) {
+        const created = await post(
+            "/users",
+            { userId, planId },
+            auth
+        );
+
+        assert.equal(created.status, 201);
+    }
+
+    const consumed = await post(
+        "/consume",
+        {
+            userId: basicUser,
+            units: 2,
+            requestId: randomUUID()
+        },
+        auth
+    );
+
+    assert.equal(consumed.status, 200);
+    assert.equal(consumed.data.accepted, true);
+
+    const result = await request(
+        "GET",
+        "/users",
+        undefined,
+        auth
+    );
+
+    assert.equal(result.status, 200);
+
+    const basic = result.data.users.find(
+        (row: any) => row.user_id === basicUser
+    );
+
+    const premium = result.data.users.find(
+        (row: any) => row.user_id === premiumUser
+    );
+
+    assert.ok(basic);
+    assert.ok(premium);
+
+    assert.equal(basic.plan_name, "Basic");
+    assert.equal(Number(basic.monthly_limit), 10);
+    assert.equal(Number(basic.units_used), 2);
+    assert.equal(Number(basic.units_remaining), 8);
+
+    assert.equal(premium.plan_name, "Premium");
+    assert.equal(Number(premium.monthly_limit), 100);
+    assert.equal(Number(premium.units_used), 0);
+    assert.equal(Number(premium.units_remaining), 100);
+
+    const otherResult = await request(
+        "GET",
+        "/users",
+        undefined,
+        { "X-API-Key": otherAccount.apiKey }
+    );
+
+    assert.equal(otherResult.status, 200);
+    assert.equal(
+        otherResult.data.users.some(
+            (row: any) =>
+                row.user_id === basicUser ||
+                row.user_id === premiumUser
+        ),
+        false
+    );
+
+    const unauthorized = await request("GET", "/users");
+
+    assert.equal(unauthorized.status, 401);
+});
+
+//
+// TEST 24: Custom plan listing and ownership
+//
+
+test("Custom plan listing returns only plans owned by the account", async () => {
+    const account = await createTestAccount("Custom Listing Test");
+    const otherAccount = await createTestAccount("Custom Listing Other");
+
+    const auth = { "X-API-Key": account.apiKey };
+
+    const accountPlan = await createCustomPlan(
+        account.apiKey,
+        "account",
+        25,
+        5
+    );
+
+    const userPlan = await createCustomPlan(
+        account.apiKey,
+        "user",
+        40,
+        8
+    );
+
+    const otherPlan = await createCustomPlan(
+        otherAccount.apiKey,
+        "account",
+        50,
+        10
+    );
+
+    const result = await request(
+        "GET",
+        "/plans/custom",
+        undefined,
+        auth
+    );
+
+    assert.equal(result.status, 200);
+    assert.equal(result.data.plans.length, 2);
+
+    const ids = result.data.plans.map(
+        (plan: any) => String(plan.id)
+    );
+
+    assert.ok(ids.includes(String(accountPlan.id)));
+    assert.ok(ids.includes(String(userPlan.id)));
+    assert.equal(ids.includes(String(otherPlan.id)), false);
+
+    const otherResult = await request(
+        "GET",
+        "/plans/custom",
+        undefined,
+        { "X-API-Key": otherAccount.apiKey }
+    );
+
+    assert.equal(otherResult.status, 200);
+    assert.equal(otherResult.data.plans.length, 1);
+    assert.equal(
+        String(otherResult.data.plans[0].id),
+        String(otherPlan.id)
+    );
+
+    const unauthorized = await request(
+        "GET",
+        "/plans/custom"
+    );
+
+    assert.equal(unauthorized.status, 401);
+});
