@@ -1,0 +1,30 @@
+
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Database backups
+backups/
+*.dump
+*.sql.gz
+
+# Git repository
+.git/
+.gitignore
+
+# Logs and temporary files
+*.log
+*.swp
+*.tmp
+
+# Test artifacts and local reports
+results/
+
+# Development documentation
+README.md

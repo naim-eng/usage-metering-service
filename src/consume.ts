@@ -15,21 +15,36 @@ export function checkQuota(
     accountMaxRequest: bigint,
     userMaxRequest: bigint
 ): { accepted: boolean; scope?: string; rule?: string } {
-
     if (units > accountMaxRequest) {
-        return { accepted: false, scope: "account", rule: "max_per_request" };
+        return {
+            accepted: false,
+            scope: "account",
+            rule: "max_per_request"
+        };
     }
 
     if (units > userMaxRequest) {
-        return { accepted: false, scope: "user", rule: "max_per_request" };
+        return {
+            accepted: false,
+            scope: "user",
+            rule: "max_per_request"
+        };
     }
 
     if (units > accountRemaining) {
-        return { accepted: false, scope: "account", rule: "monthly_limit" };
+        return {
+            accepted: false,
+            scope: "account",
+            rule: "monthly_limit"
+        };
     }
 
     if (units > userRemaining) {
-        return { accepted: false, scope: "user", rule: "monthly_limit" };
+        return {
+            accepted: false,
+            scope: "user",
+            rule: "monthly_limit"
+        };
     }
 
     return { accepted: true };
@@ -41,7 +56,6 @@ export async function consumeUnits(
     units: number,
     requestId: string
 ) {
-    // Validate inputs before accessing the database.
     if (!Number.isSafeInteger(units) || units <= 0) {
         throw new Error("Units must be a positive safe integer");
     }
@@ -62,10 +76,10 @@ export async function consumeUnits(
     try {
         await client.query("BEGIN");
 
-        // Lock the account so competing consumption
-        // requests are processed one at a time.
+        // Serialize consumption and plan changes for this account.
         const account = await client.query(
-            `SELECT id FROM accounts
+            `SELECT id
+             FROM accounts
              WHERE id = $1
              FOR UPDATE`,
             [accountId]
@@ -75,11 +89,14 @@ export async function consumeUnits(
             throw new Error("Account not found");
         }
 
-        // Find this account's user and both plans.
+        // Resolve the user within the authenticated account.
         const userPlan = await client.query(
-            `SELECT u.id, p.monthly_limit, p.max_per_request
+            `SELECT
+                u.id,
+                p.monthly_limit,
+                p.max_per_request
              FROM users u
-             JOIN plans p ON u.plan_id = p.id
+             JOIN plans p ON p.id = u.plan_id
              WHERE u.account_id = $1
                AND u.external_user_id = $2`,
             [accountId, userId.trim()]
@@ -91,12 +108,19 @@ export async function consumeUnits(
 
         const internalUserId = userPlan.rows[0].id;
 
-        // Check whether this request was already processed.
+        // Return the original decision and balances for a retry.
         const previous = await client.query(
-            `SELECT user_id, units_requested, accepted,
-                    rejection_scope, rejection_rule
+            `SELECT
+                user_id,
+                units_requested,
+                accepted,
+                rejection_scope,
+                rejection_rule,
+                account_remaining_after,
+                user_remaining_after
              FROM usage_requests
-             WHERE account_id = $1 AND request_id = $2`,
+             WHERE account_id = $1
+               AND request_id = $2`,
             [accountId, requestId]
         );
 
@@ -118,14 +142,21 @@ export async function consumeUnits(
                 accepted: old.accepted as boolean,
                 scope: old.rejection_scope,
                 rule: old.rejection_rule,
-                replayed: true
+                replayed: true,
+
+                // These may be null for requests recorded
+                // before migration 004.
+                accountRemaining: old.account_remaining_after,
+                userRemaining: old.user_remaining_after
             };
         }
 
         const accountPlan = await client.query(
-            `SELECT p.monthly_limit, p.max_per_request
+            `SELECT
+                p.monthly_limit,
+                p.max_per_request
              FROM accounts a
-             JOIN plans p ON a.plan_id = p.id
+             JOIN plans p ON p.id = a.plan_id
              WHERE a.id = $1`,
             [accountId]
         );
@@ -134,21 +165,21 @@ export async function consumeUnits(
             throw new Error("Account plan not found");
         }
 
-        // Determine the UTC month after acquiring the lock.
+        // Determine the UTC month after acquiring the account lock.
         const monthStart = getUtcMonthStart(new Date());
 
-        // Read the account's monthly consumption.
         const accountUsage = await client.query(
-            `SELECT units_used FROM monthly_usage
+            `SELECT units_used
+             FROM monthly_usage
              WHERE account_id = $1
                AND user_id IS NULL
                AND month_start = $2`,
             [accountId, monthStart]
         );
 
-        // Read the user's monthly consumption.
         const userUsage = await client.query(
-            `SELECT units_used FROM monthly_usage
+            `SELECT units_used
+             FROM monthly_usage
              WHERE account_id = $1
                AND user_id = $2
                AND month_start = $3`,
@@ -181,7 +212,6 @@ export async function consumeUnits(
                 ? userLimit - userUsed
                 : 0n;
 
-        // Apply both account and user quota rules.
         const decision = checkQuota(
             BigInt(units),
             accountRemaining,
@@ -190,7 +220,18 @@ export async function consumeUnits(
             BigInt(userPlan.rows[0].max_per_request)
         );
 
-        // Update usage only when the request is accepted.
+        // Compute balances once, then store and return them.
+        const chargedUnits = decision.accepted
+            ? BigInt(units)
+            : 0n;
+
+        const accountRemainingAfter =
+            (accountRemaining - chargedUnits).toString();
+
+        const userRemainingAfter =
+            (userRemaining - chargedUnits).toString();
+
+        // Charge credits only for accepted requests.
         if (decision.accepted) {
             await client.query(
                 `INSERT INTO monthly_usage
@@ -217,13 +258,22 @@ export async function consumeUnits(
             );
         }
 
-        // Save both accepted and rejected decisions.
+        // Persist the decision and its original balances
+        // atomically with any accepted consumption.
         await client.query(
             `INSERT INTO usage_requests
-                (account_id, user_id, request_id,
-                 units_requested, accepted,
-                 rejection_scope, rejection_rule)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                (
+                    account_id,
+                    user_id,
+                    request_id,
+                    units_requested,
+                    accepted,
+                    rejection_scope,
+                    rejection_rule,
+                    account_remaining_after,
+                    user_remaining_after
+                )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
             [
                 accountId,
                 internalUserId,
@@ -231,7 +281,9 @@ export async function consumeUnits(
                 units,
                 decision.accepted,
                 decision.scope ?? null,
-                decision.rule ?? null
+                decision.rule ?? null,
+                accountRemainingAfter,
+                userRemainingAfter
             ]
         );
 
@@ -242,22 +294,13 @@ export async function consumeUnits(
             scope: decision.scope ?? null,
             rule: decision.rule ?? null,
             replayed: false,
-            accountRemaining: (
-                accountRemaining -
-                (decision.accepted ? BigInt(units) : 0n)
-            ).toString(),
-            userRemaining: (
-                userRemaining -
-                (decision.accepted ? BigInt(units) : 0n)
-            ).toString()
+            accountRemaining: accountRemainingAfter,
+            userRemaining: userRemainingAfter
         };
-
     } catch (error) {
         await client.query("ROLLBACK");
         throw error;
-
     } finally {
         client.release();
     }
 }
-

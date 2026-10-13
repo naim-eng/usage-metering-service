@@ -1,3 +1,4 @@
+
 services:
   db:
     image: postgres:17
@@ -11,6 +12,8 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./sql/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_initial_schema.sql:ro
       - ./sql/002_seed_plans.sql:/docker-entrypoint-initdb.d/002_seed_plans.sql:ro
+      - ./sql/003_plan_history.sql:/docker-entrypoint-initdb.d/003_plan_history.sql:ro
+      - ./sql/004_idempotency_balances.sql:/docker-entrypoint-initdb.d/004_idempotency_balances.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U metering -d usage_metering"]
       interval: 5s

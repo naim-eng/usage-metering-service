@@ -5,3 +5,6 @@ dist/
 !.env.example
 coverage/
 *.log
+
+# Local database backups
+backups/

@@ -1,7 +1,23 @@
+
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
 
-const BASE_URL = "http://localhost:3001";
+// Default to the isolated test API on port 3001.
+// A different URL can be supplied through API_BASE_URL.
+const BASE_URL =
+    process.env.API_BASE_URL ?? "http://localhost:3001";
+
+// Prevent accidental execution against the main API.
+const target = new URL(BASE_URL);
+
+if (
+    !["localhost", "127.0.0.1"].includes(target.hostname) ||
+    target.port !== "3001"
+) {
+    throw new Error(
+        "Demo client must use the isolated test API on localhost:3001"
+    );
+}
 
 async function sendRequest(
     method: string,
@@ -40,9 +56,10 @@ async function main() {
     console.log("Test API:", BASE_URL);
 
     const demoId = randomUUID();
+
     console.log("Demo ID:", demoId);
 
-    // 1. Create a fresh account with the Starter plan.
+    // 1. Create an account with the Starter plan.
     const accountResponse = await fetch(`${BASE_URL}/accounts`, {
         method: "POST",
         headers: {
@@ -72,7 +89,7 @@ async function main() {
     console.log("\nAccount created:", accountResult.account.id);
     console.log("Initial plan: Starter (100 credits/month)");
 
-    // 2. Create a custom Small Business account plan.
+    // 2. Create a custom account plan.
     const customPlan = await sendRequest(
         "POST",
         "/plans",
@@ -91,7 +108,7 @@ async function main() {
         );
     }
 
-    // 3. Switch to the custom account plan.
+    // 3. Assign the custom plan to the account.
     const customPlanId = Number(customPlan.data.plan.id);
 
     const initialPlanSwitch = await sendRequest(
@@ -109,7 +126,7 @@ async function main() {
 
     console.log("New plan: Small Business (5 shared credits/month)");
 
-    // 4. Create Ahmed and Sara with Premium user plans.
+    // 4. Create two users with Premium plans.
     for (const userId of ["ahmed", "sara"]) {
         const result = await sendRequest(
             "POST",
@@ -130,7 +147,6 @@ async function main() {
     }
 
     // 5. Ahmed consumes 2 credits.
-    // Store the request so we can retry it later.
     const ahmedRequest = {
         userId: "ahmed",
         units: 2,
@@ -176,7 +192,7 @@ async function main() {
     console.log("Shared remaining:", sara.data.accountRemaining);
     console.log("Sara remaining:", sara.data.userRemaining);
 
-    // 7. Demonstrate a user-level quota rejection.
+    // 7. Demonstrate a user-level rejection.
     const userRejected = await sendRequest(
         "POST",
         "/consume",
@@ -203,7 +219,7 @@ async function main() {
     console.log("Scope:", userRejected.data.scope);
     console.log("Rule:", userRejected.data.rule);
 
-    // 8. Demonstrate an account-level quota rejection.
+    // 8. Demonstrate an account-level rejection.
     const accountRejected = await sendRequest(
         "POST",
         "/consume",
@@ -234,7 +250,7 @@ async function main() {
     console.log("Shared remaining:", accountRejected.data.accountRemaining);
     console.log("Sara remaining:", accountRejected.data.userRemaining);
 
-    // 9. Retry Ahmed's original request (idempotency).
+    // 9. Retry Ahmed's original request.
     const retry = await sendRequest(
         "POST",
         "/consume",
@@ -245,7 +261,9 @@ async function main() {
     if (
         retry.status !== 200 ||
         retry.data.accepted !== true ||
-        retry.data.replayed !== true
+        retry.data.replayed !== true ||
+        retry.data.accountRemaining !== ahmed.data.accountRemaining ||
+        retry.data.userRemaining !== ahmed.data.userRemaining
     ) {
         throw new Error(
             `Idempotency check failed: ${JSON.stringify(retry.data)}`
@@ -254,6 +272,8 @@ async function main() {
 
     console.log("\nRetrying Ahmed's original request...");
     console.log("Duplicate recognized:", retry.data.replayed);
+    console.log("Original shared remaining:", retry.data.accountRemaining);
+    console.log("Original Ahmed remaining:", retry.data.userRemaining);
     console.log("Additional credits charged: 0");
 
     // 10. Consume the final shared credit.
@@ -285,7 +305,6 @@ async function main() {
     console.log("Sara remaining: 98");
 
     // 11. Upgrade the account back to Starter.
-    // Starter is predefined account plan ID 1.
     const upgrade = await sendRequest(
         "PATCH",
         "/accounts/plan",
@@ -303,9 +322,7 @@ async function main() {
     console.log("New monthly limit: 100");
     console.log("Credits already consumed: 5");
 
-    // 12. Consume one more credit after upgrading.
-    // If the original 5 credits are preserved,
-    // the account should have 94 remaining afterward.
+    // 12. Verify that usage survives the plan upgrade.
     const afterUpgrade = await sendRequest(
         "POST",
         "/consume",
@@ -328,13 +345,14 @@ async function main() {
         );
     }
 
-    console.log("\nSara consumes 1 credit after the upgrade: ACCEPTED");
+    console.log("\nSara consumes 1 credit after upgrade: ACCEPTED");
     console.log("Shared remaining:", afterUpgrade.data.accountRemaining);
     console.log("Sara remaining:", afterUpgrade.data.userRemaining);
 
     console.log("\nPASS: User and account quotas enforced.");
     console.log("PASS: Rejected requests consumed zero credits.");
     console.log("PASS: Duplicate requests were not double-charged.");
+    console.log("PASS: Retries returned original credit balances.");
     console.log("PASS: Account upgrade preserved previous usage.");
     console.log("Demo completed successfully!");
 }
@@ -343,4 +361,3 @@ main().catch(error => {
     console.error(error);
     process.exitCode = 1;
 });
-

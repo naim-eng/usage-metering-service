@@ -1527,3 +1527,121 @@ test("Monthly reports include custom revisions and do not invent older limits", 
     assert.equal(older.data.account.monthly_limit, null);
     assert.deepEqual(older.data.account.plan_changes, []);
 });
+
+//
+// TEST 21: Idempotent retries preserve original balances
+//
+
+test("Idempotent retries preserve original balances and reject conflicts", async () => {
+    const account = await createTestAccount("Idempotency Balance Test");
+    const auth = { "X-API-Key": account.apiKey };
+
+    const userId = `retry-balances-${randomUUID()}`;
+
+    const created = await post(
+        "/users",
+        { userId, planId: 3 },
+        auth
+    );
+
+    assert.equal(created.status, 201);
+
+    // First request consumes 2 credits.
+    const requestId = randomUUID();
+
+    const original = await post(
+        "/consume",
+        { userId, units: 2, requestId },
+        auth
+    );
+
+    assert.equal(original.status, 200);
+    assert.equal(original.data.accepted, true);
+    assert.equal(original.data.replayed, false);
+    assert.equal(original.data.accountRemaining, "98");
+    assert.equal(original.data.userRemaining, "8");
+
+    // Another request consumes more credits.
+    const second = await post(
+        "/consume",
+        {
+            userId,
+            units: 2,
+            requestId: randomUUID()
+        },
+        auth
+    );
+
+    assert.equal(second.status, 200);
+    assert.equal(second.data.accountRemaining, "96");
+    assert.equal(second.data.userRemaining, "6");
+
+    // The replay must return the FIRST request's balances.
+    const replay = await post(
+        "/consume",
+        { userId, units: 2, requestId },
+        auth
+    );
+
+    assert.equal(replay.status, 200);
+    assert.equal(replay.data.accepted, true);
+    assert.equal(replay.data.replayed, true);
+    assert.equal(replay.data.accountRemaining, "98");
+    assert.equal(replay.data.userRemaining, "8");
+
+    // Reusing the ID with different units must be rejected.
+    const conflict = await post(
+        "/consume",
+        { userId, units: 1, requestId },
+        auth
+    );
+
+    assert.equal(conflict.status, 409);
+
+    // This exceeds the Basic plan's per-request limit.
+    // Rejected requests must also preserve balances.
+    const rejectedId = randomUUID();
+
+    const rejected = await post(
+        "/consume",
+        {
+            userId,
+            units: 7,
+            requestId: rejectedId
+        },
+        auth
+    );
+
+    assert.equal(rejected.status, 200);
+    assert.equal(rejected.data.accepted, false);
+    assert.equal(rejected.data.userRemaining, "6");
+    assert.equal(rejected.data.accountRemaining, "96");
+
+    const rejectedReplay = await post(
+        "/consume",
+        {
+            userId,
+            units: 7,
+            requestId: rejectedId
+        },
+        auth
+    );
+
+    assert.equal(rejectedReplay.status, 200);
+    assert.equal(rejectedReplay.data.accepted, false);
+    assert.equal(rejectedReplay.data.replayed, true);
+    assert.equal(rejectedReplay.data.userRemaining, "6");
+    assert.equal(rejectedReplay.data.accountRemaining, "96");
+
+    // Confirm that only two requests consumed credits.
+    const usage = await pool.query(
+        `SELECT units_used
+         FROM monthly_usage
+         WHERE account_id = $1
+           AND user_id IS NULL
+           AND month_start = $2::date`,
+        [account.account.id, `${currentUtcMonth()}-01`]
+    );
+
+    assert.equal(Number(usage.rows[0].units_used), 4);
+});

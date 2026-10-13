@@ -30,7 +30,7 @@ else
     echo "Test database already exists."
 fi
 
-# Check whether any application tables already exist.
+# Check whether the five core application tables exist.
 TABLE_COUNT=$(docker compose exec -T "$DB_SERVICE" \
     psql -U "$DB_USER" -d "$TEST_DB" -Atqc \
     "SELECT COUNT(*) FROM information_schema.tables
@@ -52,7 +52,7 @@ if [[ "$TABLE_COUNT" == "0" ]]; then
         < sql/002_seed_plans.sql
 
 elif [[ "$TABLE_COUNT" == "5" ]]; then
-    echo "All five application tables already exist."
+    echo "All five core application tables already exist."
 
 else
     echo "ERROR: Test database contains only $TABLE_COUNT of 5 expected tables."
@@ -60,7 +60,37 @@ else
     exit 1
 fi
 
+# Always run the history migration after the core tables exist.
+# Migration 003 is designed to be repeatable:
+# it creates missing objects and avoids duplicate baseline events.
+echo "Applying plan history migration..."
+
+docker compose exec -T "$DB_SERVICE" \
+    psql -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$TEST_DB" \
+    < sql/003_plan_history.sql
+
+echo "Applying idempotency balances migration..."
+
+docker compose exec -T "$DB_SERVICE" \
+    psql -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$TEST_DB" \
+    < sql/004_idempotency_balances.sql
+
+
+# Verify that the history table is available.
+HISTORY_EXISTS=$(docker compose exec -T "$DB_SERVICE" \
+    psql -U "$DB_USER" -d "$TEST_DB" -Atqc \
+    "SELECT CASE
+       WHEN to_regclass('public.plan_limit_history') IS NOT NULL
+       THEN 1 ELSE 0
+     END;")
+
+if [[ "$HISTORY_EXISTS" != "1" ]]; then
+    echo "ERROR: Plan history migration did not create the required table."
+    exit 1
+fi
+
 echo ""
 echo "Test database setup complete."
 echo "Database: $TEST_DB"
+echo "Plan history migration verified."
 echo "Existing data has been preserved."
