@@ -1,30 +1,34 @@
 
 # Usage Metering and Quota Service
 
-A backend service for tracking resource consumption and enforcing configurable usage limits across accounts and individual users.
+A backend service for tracking resource consumption and enforcing configurable usage quotas across accounts and individual users.
 
-Built using **TypeScript, Node.js, Express, and PostgreSQL**, the service supports account-level and user-level quotas, custom plans, API-key authentication, idempotent requests, concurrent consumption, usage history, and dynamic plan changes.
+Built with **TypeScript, Node.js, Express 5, Prisma ORM, and PostgreSQL 17**, the service demonstrates transactional quota enforcement, account isolation, idempotency, concurrent request handling, custom plan management, historical reporting, and a DDD-inspired Clean Architecture.
 
-The project includes automated tests, an example client, an isolated Docker demonstration environment, and reproducible performance testing.
+The project was developed as a backend engineering capstone and includes automated tests, an example client, Docker Compose deployment, an isolated demonstration environment, and reproducible performance testing.
 
 ## Features
 
-- Separate accounts and users with account-scoped authentication.
-- Predefined account and user plans.
-- Account-owned custom plans that can be created, listed, and updated.
-- Monthly UTC consumption limits and per-request limits.
-- Shared account quotas enforced across all users.
-- Individual user quotas enforced independently.
-- Atomic acceptance or rejection of consumption requests.
-- Rejection responses identifying the responsible quota rule and scope.
-- Idempotency protection against duplicate consumption.
-- Transactional quota enforcement under concurrent requests.
-- Immediate plan changes without resetting previously consumed credits.
-- Historical records of consumption requests and plan changes.
+- Account-level and user-level quota management.
+- Predefined and account-owned custom plans.
+- Monthly consumption limits using UTC calendar months.
+- Maximum credits allowed per request.
+- Shared account quotas across multiple users.
+- Independent user quotas.
+- Atomic quota enforcement using PostgreSQL transactions.
+- Concurrency protection through account-level row locking.
+- Atomic conditional updates without optimistic version counters.
+- API-key authentication using SHA-256 hashes.
+- Account isolation and custom plan ownership checks.
+- Idempotent consumption requests with conflict detection.
+- Plan upgrades and changes without resetting consumed credits.
+- Historical tracking of consumption and plan revisions.
 - Account and user allowance inspection.
-- Monthly usage reports.
-- Automated unit and integration tests.
-- Docker Compose deployment with an isolated example client.
+- Monthly reporting with historical plan snapshots.
+- Prisma ORM for application database operations.
+- DDD-inspired Clean Architecture.
+- Automated unit, integration, and regression tests.
+- Docker Compose deployment with an isolated demo environment.
 
 ## Technology Stack
 
@@ -33,86 +37,245 @@ The project includes automated tests, an example client, an isolated Docker demo
 | Runtime | Node.js 20 |
 | Language | TypeScript |
 | HTTP framework | Express 5 |
+| ORM | Prisma 6.12 |
 | Database | PostgreSQL 17 |
-| Database driver | node-postgres (`pg`) |
+| Database utilities | node-postgres (`pg`) |
 | TypeScript execution | `tsx` |
 | Containerization | Docker and Docker Compose |
-| Testing | Node.js test runner and integration tests |
+| Testing | Node.js test runner |
+| Version control | Git and GitHub |
+
+Prisma is the primary database access layer for the application. The `pg` driver remains available for integration-test verification and database utilities.
 
 ## Architecture
 
-The system uses a relational database as the authoritative source of plan configuration, consumption totals, and request decisions.
+The service follows a **DDD-inspired Clean Architecture** approach.
+
+Responsibilities are separated into HTTP, Application, Domain, and Infrastructure layers.
 
 ```text
-                       API Client
-                           |
-                           | X-API-Key
-                           v
-                 Express / TypeScript API
-                           |
-                 Account Authentication
-                           |
-                           v
-                   Quota Evaluation
-                    /           \
-             Account Rules    User Rules
-                    \           /
-                     \         /
-                  PostgreSQL Transaction
-                           |
-              +------------+------------+
-              |            |            |
-          Plans and     Monthly      Request
-           Accounts      Usage       History
+                    API Client
+                        |
+                        v
+                 Express HTTP API
+                  (HTTP Layer)
+                        |
+                        v
+                Application Services
+                 (Use-Case Layer)
+                        |
+              +---------+---------+
+              |                   |
+              v                   v
+         Domain Layer       Infrastructure
+         QuotaPolicy         Prisma ORM
+                             Repositories
+                                   |
+                                   v
+                              PostgreSQL
 ```
 
-Accounts own users and custom plans. Every authenticated request is associated with an account, and account ownership is enforced when accessing user records or modifying custom plans.
+### HTTP Layer
 
-Each accepted consumption request updates the applicable account and user totals in a database transaction.
+The HTTP layer is responsible for:
 
-Rejected requests do not consume credits, but their decisions are recorded for auditing and idempotent retries.
+- Routing incoming requests.
+- API-key authentication.
+- Request validation.
+- Returning HTTP status codes.
+- Formatting JSON responses.
+- Converting application errors into HTTP responses.
+
+Principal files include:
+
+```text
+src/index.ts
+src/auth.ts
+src/plans.ts
+src/history.ts
+src/reports.ts
+src/allowances.ts
+```
+
+The HTTP layer delegates business workflows to application services.
+
+### Application Layer
+
+The Application layer coordinates business use cases.
+
+Its services are located in:
+
+```text
+src/application/services/
+```
+
+Services include:
+
+| Service | Responsibility |
+|---|---|
+| ConsumeCreditsService | Evaluate and record credit consumption |
+| CreateAccountService | Create accounts and initial plan-history records |
+| CreateUserService | Register users under authenticated accounts |
+| ChangeAccountPlanService | Change account plans transactionally |
+| ChangeUserPlanService | Change individual user plans |
+| CustomPlanService | Create, list, and update custom plans |
+| ListPlansService | Retrieve predefined plans |
+| GetUsageHistoryService | Retrieve paginated consumption history |
+| GetAllowancesService | Calculate account and user allowances |
+| GetMonthlyReportService | Generate historical monthly usage reports |
+
+Application services coordinate validation of business rules, database operations, transactions, and the preparation of results.
+
+### Domain Layer
+
+The Domain layer contains business rules that can operate independently of HTTP and database infrastructure.
+
+The quota policy is implemented in:
+
+```text
+src/domain/services/QuotaPolicy.ts
+```
+
+`QuotaPolicy.evaluate()` determines whether a consumption request satisfies the applicable account and user limits.
+
+It evaluates:
+
+1. Account maximum per request.
+2. User maximum per request.
+3. Account monthly remaining credits.
+4. User monthly remaining credits.
+
+The policy returns an acceptance or rejection decision identifying the relevant scope and rule.
+
+The Domain layer does not require Express, Prisma, or PostgreSQL to evaluate these rules.
+
+### Infrastructure Layer
+
+The Infrastructure layer provides database connectivity and repository implementations.
+
+Key directories include:
+
+```text
+src/infrastructure/database/
+src/infrastructure/repositories/
+```
+
+The application uses Prisma ORM for typed database access.
+
+Infrastructure repositories support credit consumption and related transactional operations.
+
+PostgreSQL-specific SQL is retained where necessary for database row locking and in test utilities used to verify database state independently.
+
+### Prisma ORM
+
+The Prisma schema is located at:
+
+```text
+prisma/schema.prisma
+```
+
+The project uses Prisma Client to interact with the existing PostgreSQL tables.
+
+The generated Prisma Client is located under:
+
+```text
+src/generated/prisma/
+```
+
+Generated Prisma files are excluded from Git and regenerated during setup or Docker image builds.
+
+Prisma is used for:
+
+- Account and user management.
+- Authentication.
+- Predefined and custom plan management.
+- Usage consumption.
+- Historical request retrieval.
+- Allowance inspection.
+- Monthly reporting.
+
+The existing SQL initialization scripts remain responsible for creating and initializing database tables.
+
+### Architecture Trade-offs
+
+This implementation is DDD-inspired rather than a strict implementation of every Clean Architecture dependency rule.
+
+Some application services use Prisma directly, while consumption workflows use dedicated Infrastructure repositories.
+
+This approach provides useful separation of responsibilities without introducing excessive abstraction for the project's scope.
 
 ## Quota Model
 
-The service evaluates two types of limits at both the account and user levels.
+The service enforces quotas at two levels:
 
-### Monthly limit
+- Account.
+- Individual user.
 
-The maximum number of credits that may be consumed during a UTC calendar month.
+Each level has two limits:
 
-An account's monthly consumption includes usage from all users registered under that account.
+- Monthly limit.
+- Maximum credits per request.
 
-Each user also has an independent monthly consumption total.
+### Monthly Limit
 
-### Maximum per request
+The monthly limit defines the maximum number of credits available during a UTC calendar month.
 
-The maximum number of credits that may be requested in a single operation.
+Account consumption includes usage by all users belonging to the account.
 
-A request must satisfy both the account's and user's per-request limits.
+Each user also has an independent monthly limit.
 
-### Consumption decision
+For example:
 
-A request is accepted only when all applicable account-level and user-level rules permit it.
+An account has 100 monthly credits.
 
-If any rule is exceeded, the entire request is rejected. Partial credit consumption is not supported.
+User A has 10 monthly credits.
 
-A rejection identifies the relevant scope (`account` or `user`) and rule (`monthly_limit` or `max_per_request`).
+User B has 100 monthly credits.
 
-### Monthly accounting
+Both users share the account's 100-credit allowance while also respecting their individual limits.
 
-Usage is tracked by UTC calendar month.
+### Maximum Per Request
 
-Historical monthly records are retained when a new month begins. Consumption is not carried into the following month's totals.
+The maximum-per-request limit restricts how many credits can be consumed by one operation.
 
-### Remaining allowances
+A request must satisfy both the account's and user's maximum-per-request limits.
 
-Current remaining credits are calculated from the assigned plan's monthly limit and consumption already recorded for the current month.
+### Consumption Decision
 
-A user can have remaining individual credits while being unable to consume them because the shared account quota has been exhausted.
+A request is accepted only when all applicable limits permit it.
+
+If any applicable limit is exceeded, the entire request is rejected.
+
+Partial consumption is not supported.
+
+A rejected request identifies:
+
+- The rejection scope: `account` or `user`.
+- The rejection rule: `monthly_limit` or `max_per_request`.
+
+Rejected requests do not consume credits.
+
+### Monthly Accounting
+
+Consumption is tracked by UTC calendar month.
+
+New months receive separate usage totals.
+
+Previous monthly usage records are preserved for reporting and auditing.
+
+### Remaining Credits
+
+Remaining credits are calculated as:
+
+```text
+remaining = max(monthly_limit - units_used, 0)
+```
+
+A user may have remaining individual credits but still be unable to consume them when the shared account quota is exhausted.
 
 ## Predefined Plans
 
-The database automatically seeds four predefined plans.
+Four predefined plans are seeded into PostgreSQL.
 
 | Scope | Plan | Monthly credits | Maximum per request |
 |---|---|---:|---:|
@@ -121,74 +284,109 @@ The database automatically seeds four predefined plans.
 | User | Basic | 10 | 2 |
 | User | Premium | 100 | 10 |
 
-Accounts can also create custom account or user plans.
+Accounts may also create custom account or user plans.
 
-Custom plans are owned by the creating account. Other accounts cannot access or modify them.
+Custom plans belong to their creating account and cannot be accessed or modified by other accounts.
 
 ## Authentication and Account Isolation
 
-The service uses account API keys for authenticated operations.
+Authenticated API operations use account API keys.
 
-A newly created account receives an API key. The key is provided to the client and must be sent in the `X-API-Key` request header.
+A newly created account receives an API key that must be sent in the request header:
 
-Account API keys are generated using cryptographically secure random values, and only their SHA-256 hashes are stored in PostgreSQL.
+```http
+X-API-Key: <account-api-key>
+```
 
-The account creation endpoint requires a separate administrative credential supplied through the `X-Admin-Key` header.
+API keys are generated using cryptographically secure random values.
 
-API keys must be treated as secrets. Do not commit real credentials to version control.
+Only SHA-256 hashes of API keys are stored in PostgreSQL.
 
-User lookups, plan ownership checks, usage inspection, and historical reporting are scoped to the authenticated account.
+Authentication uses Prisma to retrieve the account associated with the hashed key.
+
+### Administrative Authentication
+
+Account creation requires a separate administrative key:
+
+```http
+X-Admin-Key: <admin-api-key>
+```
+
+The administrative key is configured through the `ADMIN_API_KEY` environment variable.
+
+### Tenant Isolation
+
+Every authenticated operation is scoped to its account.
+
+The application prevents accounts from:
+
+- Consuming another account's user's credits.
+- Viewing another account's usage history.
+- Accessing another account's user allowances.
+- Modifying another account's custom plans.
+- Assigning inaccessible custom plans.
+
+API keys and administrative credentials must never be committed to version control.
 
 ## API Reference
 
-The default local API address is:
+The default local API URL is:
 
-`http://localhost:3000`
+```text
+http://localhost:3000
+```
 
-### Service and plan information
+### Service and Plan Information
 
 | Method | Endpoint | Purpose |
 |---|---|---|
 | GET | `/health` | Service health check |
 | GET | `/plans` | List predefined plans |
-| GET | `/plans/custom` | List the account's custom plans |
+| GET | `/plans/custom` | List account-owned custom plans |
 
-### Accounts and users
+### Account and User Management
 
 | Method | Endpoint | Purpose |
 |---|---|---|
 | POST | `/accounts` | Create an account and issue an API key |
 | POST | `/users` | Register a user under an account |
-| GET | `/account` | Inspect the authenticated account's current plan and allowance |
-| GET | `/users` | Inspect users, assigned plans, and allowances |
-| PATCH | `/accounts/plan` | Change an account's assigned plan |
-| PATCH | `/users/plan` | Change a user's assigned plan |
+| GET | `/account` | Inspect account allowance |
+| GET | `/users` | Inspect user allowances |
+| PATCH | `/accounts/plan` | Change the account's plan |
+| PATCH | `/users/plan` | Change an individual user's plan |
 
-### Custom plan management
+### Custom Plans
 
 | Method | Endpoint | Purpose |
 |---|---|---|
 | POST | `/plans` | Create a custom plan |
-| GET | `/plans/custom` | List account-owned custom plans |
+| GET | `/plans/custom` | List custom plans |
 | PATCH | `/plans/:planId` | Update an owned custom plan |
 
-### Consumption and reporting
+### Consumption and Reporting
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| POST | `/consume` | Evaluate and record a consumption request |
-| GET | `/usage/history` | Retrieve historical request decisions |
-| GET | `/usage/monthly` | Retrieve monthly account and user usage |
+| POST | `/consume` | Evaluate and record consumption |
+| GET | `/usage/history` | Retrieve paginated request history |
+| GET | `/usage/monthly` | Retrieve monthly usage and plan history |
 
-Authenticated endpoints require:
+### Example: Create a User
 
-`X-API-Key: <account-api-key>`
+```http
+POST /users
+Content-Type: application/json
+X-API-Key: <account-api-key>
 
-Administrative account creation requires:
+{
+  "userId": "ahmed",
+  "planId": 4
+}
+```
 
-`X-Admin-Key: <admin-api-key>`
+This registers a user under the authenticated account using the selected user plan.
 
-### Example: Consume credits
+### Example: Consume Credits
 
 ```http
 POST /consume
@@ -198,221 +396,499 @@ X-API-Key: <account-api-key>
 {
   "userId": "ahmed",
   "units": 2,
-  "requestId": "a-unique-request-id"
+  "requestId": "unique-request-001"
 }
 ```
 
-The service evaluates account and user quotas and returns a decision.
+The service evaluates account-level and user-level quotas.
 
-The response indicates whether the request was accepted, the applicable rejection rule when relevant, and the resulting available allowances.
+If the request is accepted, credits are deducted atomically and the decision is recorded.
 
-Each logical consumption operation should use a unique request ID. When retrying the same operation, reuse its original request ID.
+If rejected, no credits are consumed.
 
-## Idempotency and Concurrency
+### Usage History
 
-### Idempotency
+```http
+GET /usage/history?page=1&limit=50
+X-API-Key: <account-api-key>
+```
 
-Consumption requests are identified by a client-supplied request ID scoped to an account.
+The endpoint returns paginated request history belonging to the authenticated account.
 
-If an identical request is retried, the service returns the previously recorded decision instead of consuming credits again.
+The default page is 1.
+
+The default page size is 50, and the maximum is 100.
+
+Records are ordered from newest to oldest.
+
+### Monthly Reporting
+
+```http
+GET /usage/monthly?month=2026-10
+X-API-Key: <account-api-key>
+```
+
+The report includes account and user usage totals, available historical plan limits, and plan-change events.
+
+Historical limits are not invented when the required plan-history information is unavailable.
+
+## Idempotency
+
+Every logical consumption request includes a client-supplied `requestId`.
+
+The request ID is scoped to the account.
+
+If an identical request is retried, the service returns the previously recorded decision without consuming credits again.
 
 If the same request ID is reused with conflicting parameters, the service rejects the conflict.
 
-For recent requests, the recorded remaining balances are returned with the original decision.
+Idempotency protects clients against duplicate consumption caused by:
 
-### Concurrent requests
+- Network retries.
+- Timeouts.
+- Repeated submissions.
+- Uncertain responses.
 
-Quota evaluation and accepted consumption are performed within PostgreSQL transactions.
+Recorded remaining balances are returned for idempotent retries when available.
 
-The service locks the relevant account record so requests sharing an account cannot independently approve consumption against the same outdated balance.
+Clients should reuse the original request ID when retrying the same logical operation.
 
-This prevents concurrent requests from overspending the shared account quota.
+## Concurrency and Atomic Updates
 
-Usage updates and request-history records are committed atomically.
+Concurrent credit consumption is handled using PostgreSQL transactions.
+
+The service uses account-level locking to coordinate operations sharing an account quota.
+
+Within a transaction, the service evaluates limits and performs atomic conditional updates.
+
+This prevents multiple requests from independently approving consumption based on the same outdated balance.
+
+### Atomic Conditional Updates
+
+Consumption updates are conditional on the applicable quota still permitting the operation.
+
+This allows quota correctness without requiring optimistic version counters.
+
+### Account-Level Locking
+
+Transactions acquire account-level row locks to coordinate:
+
+- Consumption requests.
+- Account plan changes.
+- User plan changes.
+- Custom plan modifications.
+
+A consistent locking order helps reduce concurrency conflicts.
+
+### Transactional Consistency
+
+Accepted consumption updates the necessary account and user usage records within one transaction.
+
+Consumption decisions and idempotency records are also stored transactionally.
+
+If a transaction fails, its incomplete operations are rolled back.
+
+The design prioritizes quota correctness over maximizing throughput for a single heavily used account.
 
 ## Plan Changes and Historical Records
 
-Account and user plan assignments can be changed without deleting or resetting usage recorded for the current month.
+Plan assignments can change without resetting the credits already consumed during the current month.
 
-Updated limits take effect on subsequent requests.
+Updated limits affect subsequent requests.
 
-Custom plan updates also affect accounts or users currently assigned to those plans.
+### Account Plan Changes
 
-The service records plan changes in PostgreSQL and provides monthly reporting that includes relevant plan history.
+An account may switch to an accessible account plan.
 
-Historical reporting distinguishes available recorded plan history from periods for which historical plan limits cannot be established.
+The service records the limits that become effective following the switch.
+
+Reassigning the existing plan does not create a duplicate history event.
+
+### User Plan Changes
+
+An individual user may switch to an accessible user plan.
+
+The change preserves previously consumed credits.
+
+The new plan limits are recorded in the user's history.
+
+### Custom Plan Revisions
+
+Accounts may update their owned custom plans.
+
+If an updated custom account plan is assigned to the account, the new limits are recorded.
+
+If an updated custom user plan is assigned to multiple users, each affected user receives a new history record.
+
+Unchanged plans do not generate duplicate history events.
+
+All changes are handled transactionally.
+
+## Historical Monthly Reporting
+
+Monthly reporting reconstructs the plan limits effective at the applicable reporting cutoff.
+
+The reporting implementation is located in:
+
+```text
+src/application/services/GetMonthlyReportService.ts
+```
+
+It uses Prisma and PostgreSQL transactions.
+
+### Reporting Consistency
+
+The service uses:
+
+```text
+RepeatableRead
+```
+
+transaction isolation to retrieve a consistent view of account, user, usage, and plan-history data.
+
+The reporting cutoff uses PostgreSQL's:
+
+```sql
+transaction_timestamp()
+```
+
+The cutoff is stable within the reporting transaction.
+
+### Historical Snapshots
+
+The service retrieves plan-history records applicable at the cutoff and identifies the latest effective record.
+
+It also returns applicable plan-change events in chronological order.
+
+When historical limits cannot be established, the report indicates that they are unavailable rather than substituting current limits.
+
+### Regression Protection
+
+An additional regression test checks whether a newly created account can immediately retrieve its initial monthly plan limits.
+
+The test repeats account creation and immediate reporting 30 times.
+
+This targets a previously observed intermittent issue involving missing historical limits.
+
+The regression test is retained as an automated safeguard. The original intermittent failure's precise root cause has not been conclusively established.
 
 ## Getting Started
 
 ### Prerequisites
 
-- Docker Engine or Docker Desktop
-- Docker Compose
-- Git
+- Docker Engine or Docker Desktop.
+- Docker Compose.
+- Git.
+- Node.js 20 and npm for local development.
 
-Node.js 20 and npm are additionally required for running development commands directly on the host.
-
-### 1. Clone the repository
+### 1. Clone the Repository
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/naim-eng/usage-metering-service.git
 cd usage-metering-service
 ```
 
-Replace `<repository-url>` with the final GitHub repository URL.
+### 2. Configure Environment Variables
 
-### 2. Configure environment variables
-
-Copy the example configuration:
+Create a local environment configuration:
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` and provide a strong PostgreSQL password and a secure administrative API key.
+Configure a strong database password and administrative API key.
 
-Do not commit `.env`.
-
-For the Docker deployment, the required Compose variables are:
-
-- `DB_PASSWORD`
-- `ADMIN_API_KEY`
-
-The remaining variables in `.env.example` support direct local execution of the API.
-
-### 3. Start the complete application
-
-```bash
-docker compose up --build
-```
-
-Docker Compose starts the main PostgreSQL database, the main API, and a separate demonstration environment.
-
-The demonstration environment contains its own PostgreSQL database, API, and client.
-
-The demo client runs automatically after its API becomes healthy.
-
-The primary API is accessible at:
-
-`http://localhost:3000`
-
-Check its health:
-
-```bash
-curl http://localhost:3000/health
-```
-
-### 4. Inspect the demonstration results
-
-In another terminal:
-
-```bash
-docker compose logs demo-client
-```
-
-A successful execution ends with:
+The Docker Compose configuration requires:
 
 ```text
-Demo completed successfully!
+DB_PASSWORD
+ADMIN_API_KEY
 ```
 
-The demonstration includes users assigned to different plans, successful consumption, user-level rejection, shared account rejection, idempotent retries, and a plan upgrade.
+Additional database environment variables are used when running the application directly on the host.
 
-The demo API connects to its own database, so its consumption does not affect the main account database.
+Do not commit `.env`, `prisma/.env`, or real credentials.
 
-### 5. Stop the application
+### 3. Start PostgreSQL
+
+For local development:
 
 ```bash
-docker compose down
+docker compose up -d db
 ```
 
-This stops and removes containers while preserving named database volumes.
+The primary PostgreSQL container exposes its database on:
 
-**Do not use `docker compose down -v` unless you intentionally want to delete the stored database data.**
+```text
+127.0.0.1:5433
+```
 
-## Local Development
+The main database is:
 
-Install dependencies:
+```text
+usage_metering
+```
+
+### 4. Install Dependencies
 
 ```bash
 npm ci
 ```
 
-The application reads its database configuration and administrative key from environment variables.
+### 5. Generate Prisma Client
 
-With PostgreSQL running and the local configuration supplied, start the API:
+```bash
+npx prisma generate
+```
+
+Prisma generates the typed client from:
+
+```text
+prisma/schema.prisma
+```
+
+The client output is excluded from Git.
+
+### 6. Start the API
 
 ```bash
 npm start
 ```
 
-Run TypeScript validation:
+The default API port is 3000.
+
+Verify the health endpoint:
+
+```bash
+curl http://localhost:3000/health
+```
+
+Expected response:
+
+```json
+{
+  "status": "ok"
+}
+```
+
+## Docker Deployment
+
+The Docker Compose configuration provides separate main and demonstration services.
+
+### Main Services
+
+| Service | Purpose |
+|---|---|
+| `db` | Primary PostgreSQL database |
+| `api` | Main HTTP API |
+
+Start the main application:
+
+```bash
+docker compose up -d --build db api
+```
+
+The main API is accessible at:
+
+```text
+http://localhost:3000
+```
+
+### Isolated Demo Services
+
+| Service | Purpose |
+|---|---|
+| `demo-db` | Isolated demonstration PostgreSQL database |
+| `demo-api` | Demonstration API |
+| `demo-client` | Example client |
+
+The demo database is named:
+
+```text
+usage_metering_demo
+```
+
+It has a separate persistent Docker volume from the primary database.
+
+### Run the Docker Demo
+
+Build the demo images:
+
+```bash
+docker compose build demo-api demo-client
+```
+
+Execute the demonstration:
+
+```bash
+docker compose run --rm --build demo-client
+```
+
+The example client connects to:
+
+```text
+http://demo-api:3000
+```
+
+A successful demonstration ends with:
+
+```text
+Demo completed successfully!
+```
+
+### Stop Docker Services
+
+```bash
+docker compose down
+```
+
+This removes containers while preserving named database volumes.
+
+**Do not run `docker compose down -v` unless you intentionally want to delete the stored database data.**
+
+## Automated Tests
+
+The project contains multiple automated test suites.
+
+| Suite | Tests |
+|---|---:|
+| Quota unit tests | 6 |
+| Domain policy tests | 6 |
+| Prisma consumption integration tests | 5 |
+| API integration tests, including the reporting regression test | 25 |
+
+Total: **42 automated test cases** across these suites.
+
+The monthly-reporting regression test performs 30 account-creation and reporting iterations within one test case.
+
+### TypeScript Validation
 
 ```bash
 npm run typecheck
 ```
 
-## Automated Tests
-
-The project includes five quota-logic unit tests and 24 database-backed integration tests.
-
-Run all tests:
+### Run Standard Project Tests
 
 ```bash
 npm test
 ```
 
-Run unit tests only:
+This runs the quota unit tests and API integration tests.
+
+### Run Quota Unit Tests
 
 ```bash
 npm run test:unit
 ```
 
-Run integration tests only:
+### Run API Integration Tests
 
 ```bash
 npm run test:integration
 ```
 
-The integration-test script prepares a separate database named `usage_metering_test`, starts a temporary API on port 3001, runs the integration tests, and stops the temporary server.
+The script:
 
-The tests cover authentication, tenant isolation, account and user quotas, idempotency, concurrent requests, plan changes, reporting, and allowance inspection.
+1. Prepares the isolated test database.
+2. Starts a temporary API on port 3001.
+3. Runs the main API integration tests.
+4. Runs the monthly-reporting regression test.
+5. Stops the temporary server.
 
-**Never run integration tests against the main application database.**
+### Run Domain Tests
+
+```bash
+npx tsx --test src/domain/services/QuotaPolicy.test.ts
+```
+
+### Run Prisma Integration Tests
+
+```bash
+npx tsx --test src/application/services/ConsumeCreditsService.integration.test.ts
+```
+
+Prisma integration tests require an appropriately configured test-only `DATABASE_URL`.
+
+They validate that the target database is `usage_metering_test` before running database operations.
+
+### Test Database Safety
+
+The integration tests must run against:
+
+```text
+usage_metering_test
+```
+
+They must not run against:
+
+```text
+usage_metering
+```
+
+Database safety checks are implemented in the test runner and test infrastructure.
+
+The temporary integration-test API uses port 3001 to avoid interfering with the main API on port 3000.
+
+### Test Coverage
+
+The tests cover:
+
+- API-key authentication.
+- Account isolation.
+- Account and user quota enforcement.
+- Concurrent consumption.
+- Atomic transaction rollback.
+- Idempotent retries.
+- Conflicting request IDs.
+- Account and user plan switching.
+- Custom plan ownership.
+- Custom plan revisions.
+- Historical plan records.
+- Usage history.
+- Monthly reporting.
+- Account and user allowances.
+- Immediate reporting after account creation.
 
 ## Example Client
 
 The example client is located at:
 
-`examples/demo-client.ts`
+```text
+examples/demo-client.ts
+```
 
-It demonstrates two users under one account with different plans:
+It demonstrates two users under one account:
 
-- Ahmed: Premium user plan.
-- Sara: Basic user plan.
+- Ahmed using the Premium user plan.
+- Sara using the Basic user plan.
 
-The example creates a custom account plan with a shared limit of five credits.
+The example uses a custom shared account quota.
 
-It demonstrates successful requests, rejection by a user-specific rule, rejection by the shared account quota, idempotent retries, and an account plan upgrade that preserves previously consumed credits.
+It demonstrates:
 
-It also queries the current account and user allowances.
+- Successful credit consumption.
+- User maximum-per-request enforcement.
+- Shared account quota enforcement.
+- Idempotent retries.
+- Account plan upgrades.
+- Preserved consumed credits following plan changes.
+- Account and user allowance inspection.
 
-The client supports two isolated destinations:
+The Docker demo runs against the isolated demonstration database.
 
-- `http://localhost:3001` for local test execution.
-- `http://demo-api:3000` inside Docker Compose.
-
-It intentionally rejects direct execution against the main API on port 3000.
+The example client is intentionally configured to avoid performing demonstration consumption against the main production-style API.
 
 ## Performance Testing
 
-A repeatable load-test script is provided at:
+A repeatable load-test script is available at:
 
-`src/load-test.ts`
+```text
+src/load-test.ts
+```
 
-The test submits 100 consumption requests in batches of 10 concurrent operations.
+The recorded workload contains 100 consumption requests submitted in batches of 10 concurrent operations.
 
-Two successful local benchmark runs were recorded.
+Two local benchmark runs were recorded before the application-wide Prisma migration.
 
 | Metric | Run 1 | Run 2 |
 |---|---:|---:|
@@ -422,117 +898,238 @@ Two successful local benchmark runs were recorded.
 | Throughput | 67.23 req/s | 57.78 req/s |
 | P95 latency | 155.27 ms | 179.59 ms |
 
-Both runs recorded exactly 100 consumed credits, with no rejected requests or errors.
+Both runs recorded exactly 100 consumed credits without rejected requests or errors.
 
-Detailed results, database verification, limitations, and reproduction instructions are available in:
+Detailed results are located at:
 
-`results/load-test-results.md`
+```text
+results/load-test-results.md
+```
 
-These results provide a baseline for the local environment and do not establish maximum production throughput.
+These results establish a historical local benchmark baseline.
+
+They should not be interpreted as verified performance measurements of the final Prisma-refactored implementation.
+
+The benchmark also does not establish maximum production throughput.
 
 ## Database Schema and Initialization
 
-SQL initialization and migration files are stored in `sql/`.
+The project uses PostgreSQL as the authoritative source of persistent application data.
+
+Core tables include:
+
+| Table | Purpose |
+|---|---|
+| `accounts` | Account information and assigned plans |
+| `users` | Account-owned users |
+| `plans` | Predefined and custom plan definitions |
+| `monthly_usage` | Monthly account and user usage totals |
+| `usage_requests` | Consumption decisions and idempotency records |
+| `plan_limit_history` | Historical plan assignments and revisions |
+
+### SQL Initialization Files
+
+SQL initialization and migration files are located in:
+
+```text
+sql/
+```
 
 | File | Purpose |
 |---|---|
-| `001_initial_schema.sql` | Creates the core database schema |
-| `002_seed_plans.sql` | Inserts predefined plans |
-| `003_plan_history.sql` | Adds plan-limit history tracking |
-| `004_idempotency_balances.sql` | Stores original remaining balances for idempotent retries |
+| `001_initial_schema.sql` | Initial database schema |
+| `002_seed_plans.sql` | Predefined plan data |
+| `003_plan_history.sql` | Historical plan tracking |
+| `004_idempotency_balances.sql` | Recorded balances for idempotent retries |
 
-Core tables include accounts, users, plans, monthly usage, and usage requests.
+These files remain part of the project after introducing Prisma.
 
-A separate plan-history table records relevant plan assignment changes and updates.
+Prisma's schema models the existing database structure.
 
-PostgreSQL named volumes preserve database data across ordinary container restarts.
+### Persistence
 
-Initialization scripts run automatically when PostgreSQL initializes a new empty database volume.
+PostgreSQL uses named Docker volumes.
 
+Database contents persist across ordinary container restarts.
 
-## Product Assumptions
+Initialization scripts execute when a new empty PostgreSQL data volume is initialized.
 
-The service is designed around the following product assumptions:
+Do not delete or reset database volumes unless data loss is explicitly intended.
 
-- **Credits represent usage, not money.** A credit is an abstract unit of resource consumption. The service does not manage payments, refunds, or monetary balances.
-- **Each user belongs to one account.** User identifiers are scoped to their parent account, allowing different accounts to use the same external user identifier.
-- **Every consumption request belongs to a registered user.** The request is evaluated against both the user's assigned plan and the parent account's assigned plan.
-- **Account credits are shared.** All users under an account consume from the same account-level monthly allowance, while retaining separate user-level allowances.
-- **Monthly limits follow UTC calendar months.** Consumption is tracked separately for each month. Previous months remain available for historical reporting.
-- **Plan changes apply to subsequent requests immediately.** Changing a plan does not erase, refund, or reset credits already consumed during the current month.
-- **Consumption is all-or-nothing.** Requests exceeding any applicable quota are rejected entirely; partial consumption is not supported.
-- **Clients provide unique request IDs.** Retrying the same logical operation must reuse its original request ID to prevent duplicate charging.
-- **API keys identify accounts.** The service assumes clients protect their account API keys and that administrative account creation uses a separate secret.
-- **Usage is nonnegative and irreversible through the current API.** The service does not provide credit-refund or consumption-reversal operations.
+## Project Structure
 
-These assumptions define the scope of the project and distinguish usage metering from a complete subscription billing platform.
+```text
+usage-metering-service/
+|
+|-- prisma/
+|   |-- schema.prisma
+|
+|-- sql/
+|   |-- 001_initial_schema.sql
+|   |-- 002_seed_plans.sql
+|   |-- 003_plan_history.sql
+|   |-- 004_idempotency_balances.sql
+|
+|-- src/
+|   |-- index.ts
+|   |-- auth.ts
+|   |-- api-keys.ts
+|   |-- plans.ts
+|   |-- allowances.ts
+|   |-- history.ts
+|   |-- reports.ts
+|   |-- db.ts
+|   |
+|   |-- domain/
+|   |   |-- services/
+|   |       |-- QuotaPolicy.ts
+|   |       |-- QuotaPolicy.test.ts
+|   |
+|   |-- application/
+|   |   |-- services/
+|   |       |-- ConsumeCreditsService.ts
+|   |       |-- CreateAccountService.ts
+|   |       |-- CreateUserService.ts
+|   |       |-- ChangeAccountPlanService.ts
+|   |       |-- ChangeUserPlanService.ts
+|   |       |-- CustomPlanService.ts
+|   |       |-- ListPlansService.ts
+|   |       |-- GetUsageHistoryService.ts
+|   |       |-- GetAllowancesService.ts
+|   |       |-- GetMonthlyReportService.ts
+|   |       |-- ConsumeCreditsService.integration.test.ts
+|   |
+|   |-- infrastructure/
+|   |   |-- database/
+|   |   |-- repositories/
+|   |
+|   |-- generated/
+|   |   |-- prisma/
+|   |
+|   |-- integration.test.ts
+|   |-- monthly-report-regression.test.ts
+|   |-- test-quota.ts
+|   |-- test-db.ts
+|   |-- load-test.ts
+|
+|-- scripts/
+|   |-- setup-test-db.sh
+|   |-- run-integration-tests.sh
+|
+|-- examples/
+|   |-- demo-client.ts
+|
+|-- results/
+|   |-- load-test-results.md
+|
+|-- backups/
+|
+|-- Dockerfile
+|-- docker-compose.yml
+|-- prisma.config.ts
+|-- package.json
+|-- tsconfig.json
+|-- README.md
+```
 
-
-
-
+Generated Prisma files, local secrets, and environment-specific files are not intended to be committed.
 
 ## Design Decisions and Trade-offs
 
-### PostgreSQL as the source of truth
+### PostgreSQL as Source of Truth
 
-Consumption totals and decisions are stored in PostgreSQL rather than in process memory.
+All persistent usage records, quota totals, and consumption decisions are stored in PostgreSQL.
 
-This allows consumption to survive API restarts and supports transactional enforcement.
+This allows consumption decisions to survive API restarts.
 
-### Account-level locking
+### Prisma ORM
 
-The implementation prioritizes quota correctness by serializing quota-changing operations within an account.
+Prisma provides typed database access and reduces repetitive SQL in application workflows.
 
-This simplifies enforcement of the shared account quota, although very high traffic concentrated on one account may experience lock contention.
+The existing SQL schema remains authoritative for initialization.
 
-### Separate monthly aggregates
+### DDD-Inspired Clean Architecture
 
-The database stores account-level and user-level monthly consumption totals.
+The code separates HTTP concerns, business workflows, domain rules, and database infrastructure.
 
-This supports shared account enforcement and individual user allowance inspection without scanning every historical request for each decision.
+The architecture is deliberately pragmatic rather than strictly enforcing every possible abstraction boundary.
 
-### Explicit idempotency keys
+### Account-Level Serialization
 
-Clients provide request IDs so retries can be recognized without charging credits twice.
+Quota-changing operations coordinate through account-level locking.
 
-Conflicting reuse of the same request ID is rejected.
+This improves correctness for shared quotas but can reduce throughput for accounts with very high concurrent traffic.
 
-### Historical plan snapshots
+### Atomic Conditional Updates
 
-Plan history is retained so historical reports can describe known plan changes without assuming that current limits always applied in the past.
+Quota updates are conditional on remaining credits and operate within transactions.
 
-### Isolated Docker demonstration
+No optimistic version counters are required.
 
-The Compose stack uses separate main and demonstration databases.
+### Separate Monthly Aggregates
 
-This adds deployment complexity but makes the example reproducible without modifying the main account's credits.
+The database maintains account-level and user-level usage totals.
 
-## Limitations and Future Improvements
+This supports efficient quota evaluation without scanning every consumption request.
 
-This project focuses on quota enforcement rather than billing or payment processing.
+### Explicit Idempotency Keys
+
+Client-supplied request IDs allow retries to return existing decisions without charging credits again.
+
+### Historical Plan Snapshots
+
+Plan history is retained to support reports that distinguish past effective limits from current plan settings.
+
+### Isolated Demonstration Environment
+
+The Docker demo has a separate database, allowing end-to-end examples without consuming credits from the primary application database.
+
+## Product Assumptions
+
+The service is built around the following assumptions:
+
+- Credits represent resource consumption, not money.
+- Each user belongs to one account.
+- User identifiers are scoped to their account.
+- Every consumption request references a registered user.
+- Account quotas are shared across their users.
+- Each user also has independent quotas.
+- Monthly accounting uses UTC calendar months.
+- Plan changes preserve previously consumed credits.
+- Consumption is all-or-nothing.
+- Every logical consumption request has a unique request ID.
+- Account API keys must be kept secret.
+- Usage is nonnegative.
+- The current API does not support reversing previously consumed credits.
+
+The service is a usage-metering backend rather than a complete subscription billing platform.
+
+## Limitations
 
 Current limitations include:
 
-- No payment processing, invoicing, or subscription billing.
+- No subscription billing or payment processing.
 - No graphical administration dashboard.
-- No role-based administration system beyond the existing account and administrative credentials.
-- No distributed multi-instance or high-availability testing.
-- No production-scale benchmark or service-level objective.
-- The performance test uses a limited local workload.
-- Account-level serialization may limit throughput for a single heavily used account.
-- Historical reporting depends on the plan-history information available in the database.
+- No production-scale performance testing.
+- Account-level locking may reduce throughput under heavy concurrent traffic.
 
-Possible future improvements include production observability, additional benchmark workloads, pagination or filtering enhancements, and more extensive deployment testing.
+## Project Verification
+
+The refactored implementation has successfully completed:
+
+- TypeScript validation.
+- 6 quota unit tests.
+- 6 Domain policy tests.
+- 5 Prisma consumption integration tests.
+- 25 HTTP integration tests, including the new monthly-reporting regression test.
+- 30 immediate account-creation/reporting checks within the regression test.
+- Five consecutive successful runs of the original 24-test integration suite during stability verification.
+- A successful isolated Docker Compose demo with six passing checks.
+
+The project demonstrates practical backend engineering concepts including transactional consistency, account isolation, idempotency, atomic quota enforcement, Prisma ORM integration, and DDD-inspired separation of responsibilities.
 
 ## Project Status
 
-The implementation has passed:
+The application-wide Prisma and Clean Architecture refactor has been implemented and validated locally.
 
-- 5 unit tests.
-- 24 integration tests.
-- TypeScript validation.
-- An end-to-end Docker Compose demonstration.
-- Two reproducible load-test executions.
-- Production dependency security auditing with zero reported vulnerabilities.
-
-The application is intended as a backend engineering capstone demonstrating transactional quota enforcement, account isolation, idempotency, and practical deployment and testing.
+Final repository review, documentation updates, and Git integration are the remaining release steps.

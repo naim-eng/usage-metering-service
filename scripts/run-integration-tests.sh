@@ -31,23 +31,21 @@ trap 'exit 143' TERM
 
 echo "Usage Metering Service - Integration Tests"
 
-# Safety check: do not connect to an existing server.
+# Never connect to an already running server.
 if (echo > /dev/tcp/127.0.0.1/"$TEST_PORT") 2>/dev/null; then
     echo "ERROR: Port $TEST_PORT is already in use."
     echo "Stop the existing test server before running this script."
     exit 1
 fi
 
-# Prepare the isolated test database.
+# Prepare only the isolated test database.
 bash scripts/setup-test-db.sh
 
-# Create a temporary log file.
+# Create a temporary server log.
 SERVER_LOG=$(mktemp)
 
 echo "Starting temporary test server..."
 
-# Start Node.js directly instead of using the npx launcher.
-# This allows SERVER_PID to reference the server process.
 PORT="$TEST_PORT" \
 DB_NAME="$TEST_DB" \
 node --import tsx src/index.ts >"$SERVER_LOG" 2>&1 &
@@ -58,8 +56,6 @@ SERVER_PID=$!
 READY=false
 
 for i in {1..30}; do
-
-    # Stop if the backend exited unexpectedly.
     if ! kill -0 "$SERVER_PID" 2>/dev/null; then
         echo "ERROR: Test server exited unexpectedly."
         cat "$SERVER_LOG"
@@ -68,7 +64,6 @@ for i in {1..30}; do
 
     if curl --silent --fail \
         "http://127.0.0.1:$TEST_PORT/health" >/dev/null; then
-
         READY=true
         break
     fi
@@ -85,7 +80,12 @@ fi
 echo "Test server is ready."
 echo "Running integration tests..."
 
-# Run all integration tests.
-DB_NAME="$TEST_DB" npx tsx --test src/integration.test.ts
+# Run the existing API integration tests and
+# the monthly-reporting regression test.
+# DB_NAME is explicitly restricted to the test database.
+DB_NAME="$TEST_DB" npx tsx --test \
+    src/integration.test.ts \
+    src/monthly-report-regression.test.ts
+
 echo ""
 echo "Integration tests completed successfully."

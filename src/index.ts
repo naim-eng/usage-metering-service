@@ -1,17 +1,44 @@
+
 import { allowancesRouter } from "./allowances.js";
 import { reportsRouter } from "./reports.js";
 import { historyRouter } from "./history.js";
 import { plansRouter } from "./plans.js";
+
 import { ConsumeCreditsService } from "./application/services/ConsumeCreditsService.js";
+import {
+    CreateAccountService,
+    InvalidAccountPlanError
+} from "./application/services/CreateAccountService.js";
+import {
+    CreateUserService,
+    InvalidUserPlanError,
+    AccountNotFoundError,
+    UserAlreadyExistsError
+} from "./application/services/CreateUserService.js";
+import {
+    ChangeAccountPlanService,
+    InvalidAccountPlanSelectionError
+} from "./application/services/ChangeAccountPlanService.js";
+import {
+    ChangeUserPlanService,
+    InvalidUserPlanSelectionError,
+    UserNotFoundForPlanChangeError
+} from "./application/services/ChangeUserPlanService.js";
+import { ListPlansService } from "./application/services/ListPlansService.js";
+
 import { prisma } from "./infrastructure/database/prisma.js";
 import { authenticateAccount } from "./auth.js";
 import express from "express";
-import { pool } from "./db.js";
-
-import { generateApiKey, hashApiKey } from "./api-keys.js";
 
 const app = express();
+
 const consumeCreditsService = new ConsumeCreditsService(prisma);
+const createAccountService = new CreateAccountService(prisma);
+const createUserService = new CreateUserService(prisma);
+const changeAccountPlanService = new ChangeAccountPlanService(prisma);
+const changeUserPlanService = new ChangeUserPlanService(prisma);
+const listPlansService = new ListPlansService(prisma);
+
 const PORT = Number(process.env.PORT ?? 3000);
 
 app.use(express.json());
@@ -21,17 +48,12 @@ app.get("/health", (req, res) => {
     res.json({ status: "ok" });
 });
 
-// Retrieve predefined plans.
-app.get("/plans", async (req, res) => {
+// Retrieve predefined plans using Prisma.
+app.get("/plans", async (_req, res) => {
     try {
-        const result = await pool.query(
-            `SELECT id, name, plan_type, monthly_limit, max_per_request
-             FROM plans
-             WHERE owner_account_id IS NULL
-             ORDER BY id`
-        );
+        const plans = await listPlansService.execute();
 
-        res.json(result.rows);
+        res.status(200).json(plans);
     } catch (error) {
         console.error("Error retrieving plans:", error);
         res.status(500).json({
@@ -67,72 +89,25 @@ app.post("/accounts", async (req, res) => {
         return;
     }
 
-    const client = await pool.connect();
-
     try {
-        await client.query("BEGIN");
-
-        const plan = await client.query(
-            `SELECT id, name, monthly_limit, max_per_request
-             FROM plans
-             WHERE id = $1
-               AND plan_type = 'account'
-               AND owner_account_id IS NULL`,
-            [planId]
+        const result = await createAccountService.execute(
+            name,
+            BigInt(planId)
         );
 
-        if (plan.rowCount === 0) {
-            await client.query("ROLLBACK");
-
+        res.status(201).json(result);
+    } catch (error) {
+        if (error instanceof InvalidAccountPlanError) {
             res.status(400).json({
                 error: "Invalid account plan"
             });
             return;
         }
 
-        const apiKey = generateApiKey();
-        const apiKeyHash = hashApiKey(apiKey);
-
-        const result = await client.query(
-            `INSERT INTO accounts (name, api_key_hash, plan_id)
-             VALUES ($1, $2, $3)
-             RETURNING id, name, plan_id, created_at`,
-            [name.trim(), apiKeyHash, planId]
-        );
-
-        const account = result.rows[0];
-        const selectedPlan = plan.rows[0];
-
-        await client.query(
-            `INSERT INTO plan_limit_history
-                (account_id, user_id, plan_id, plan_name,
-                 monthly_limit, max_per_request,
-                 effective_at, change_type)
-             VALUES
-                ($1, NULL, $2, $3, $4, $5, NOW(), 'baseline')`,
-            [
-                account.id,
-                selectedPlan.id,
-                selectedPlan.name,
-                selectedPlan.monthly_limit,
-                selectedPlan.max_per_request
-            ]
-        );
-
-        await client.query("COMMIT");
-
-        res.status(201).json({
-            account,
-            apiKey
-        });
-    } catch (error) {
-        await client.query("ROLLBACK");
         console.error("Account creation failed:", error);
         res.status(500).json({
             error: "Failed to create account"
         });
-    } finally {
-        client.release();
     }
 });
 
@@ -154,90 +129,30 @@ app.post("/users", authenticateAccount, async (req, res) => {
         return;
     }
 
-    const client = await pool.connect();
-
     try {
-        await client.query("BEGIN");
-
-        const account = await client.query(
-            `SELECT id
-             FROM accounts
-             WHERE id = $1
-             FOR UPDATE`,
-            [accountId]
+        const result = await createUserService.execute(
+            BigInt(accountId),
+            userId,
+            BigInt(planId)
         );
 
-        if (account.rowCount === 0) {
-            await client.query("ROLLBACK");
+        res.status(201).json(result);
+    } catch (error) {
+        if (error instanceof AccountNotFoundError) {
             res.status(404).json({
                 error: "Account not found"
             });
             return;
         }
 
-        const plan = await client.query(
-            `SELECT id, name, monthly_limit, max_per_request
-             FROM plans
-             WHERE id = $1
-               AND plan_type = 'user'
-               AND (
-                   owner_account_id IS NULL
-                   OR owner_account_id = $2
-               )`,
-            [planId, accountId]
-        );
-
-        if (plan.rowCount === 0) {
-            await client.query("ROLLBACK");
+        if (error instanceof InvalidUserPlanError) {
             res.status(400).json({
                 error: "Invalid or inaccessible user plan"
             });
             return;
         }
 
-        const result = await client.query(
-            `INSERT INTO users
-                (account_id, external_user_id, plan_id)
-             VALUES ($1, $2, $3)
-             RETURNING id, account_id, external_user_id,
-                       plan_id, created_at`,
-            [accountId, userId.trim(), planId]
-        );
-
-        const createdUser = result.rows[0];
-        const selectedPlan = plan.rows[0];
-
-        await client.query(
-            `INSERT INTO plan_limit_history
-                (account_id, user_id, plan_id, plan_name,
-                 monthly_limit, max_per_request,
-                 effective_at, change_type)
-             VALUES
-                ($1, $2, $3, $4, $5, $6, NOW(), 'baseline')`,
-            [
-                accountId,
-                createdUser.id,
-                selectedPlan.id,
-                selectedPlan.name,
-                selectedPlan.monthly_limit,
-                selectedPlan.max_per_request
-            ]
-        );
-
-        await client.query("COMMIT");
-
-        res.status(201).json({
-            user: createdUser
-        });
-    } catch (error: unknown) {
-        await client.query("ROLLBACK");
-
-        if (
-            typeof error === "object" &&
-            error !== null &&
-            "code" in error &&
-            error.code === "23505"
-        ) {
+        if (error instanceof UserAlreadyExistsError) {
             res.status(409).json({
                 error: "User already exists in this account"
             });
@@ -248,8 +163,6 @@ app.post("/users", authenticateAccount, async (req, res) => {
         res.status(500).json({
             error: "Failed to register user"
         });
-    } finally {
-        client.release();
     }
 });
 
@@ -275,13 +188,13 @@ app.post("/consume", authenticateAccount, async (req, res) => {
     }
 
     try {
+        const result = await consumeCreditsService.execute({
+            accountId: BigInt(accountId),
+            externalUserId: userId,
+            units: BigInt(units),
+            requestId
+        });
 
-         const result = await consumeCreditsService.execute({
-    accountId: BigInt(accountId),
-    externalUserId: userId,
-    units: BigInt(units),
-    requestId
-});
         res.status(200).json(result);
     } catch (error) {
         const message =
@@ -312,104 +225,48 @@ app.use("/plans", plansRouter);
 app.use("/usage", historyRouter);
 app.use("/usage", reportsRouter);
 app.use("/", allowancesRouter);
+
 // Change an account plan and record its new quota limits.
 app.patch("/accounts/plan", authenticateAccount, async (req, res) => {
     const accountId = res.locals.account.id;
     const { planId } = req.body ?? {};
 
     if (!Number.isSafeInteger(planId) || planId <= 0) {
-        res.status(400).json({ error: "Invalid planId" });
+        res.status(400).json({
+            error: "Invalid planId"
+        });
         return;
     }
 
-    const client = await pool.connect();
-
     try {
-        await client.query("BEGIN");
-
-        const account = await client.query(
-            `SELECT id, plan_id
-             FROM accounts
-             WHERE id = $1
-             FOR UPDATE`,
-            [accountId]
+        const result = await changeAccountPlanService.execute(
+            BigInt(accountId),
+            BigInt(planId)
         );
 
-        if (account.rowCount === 0) {
-            await client.query("ROLLBACK");
-            res.status(404).json({
-                error: "Account not found"
-            });
-            return;
-        }
-
-        const plan = await client.query(
-            `SELECT id, name, monthly_limit, max_per_request
-             FROM plans
-             WHERE id = $1
-               AND plan_type = 'account'
-               AND (owner_account_id IS NULL OR owner_account_id = $2)`,
-            [planId, accountId]
-        );
-
-        if (plan.rowCount === 0) {
-            await client.query("ROLLBACK");
+        res.status(200).json(result);
+    } catch (error) {
+        if (error instanceof InvalidAccountPlanSelectionError) {
             res.status(400).json({
                 error: "Invalid or inaccessible account plan"
             });
             return;
         }
 
-        const selectedPlan = plan.rows[0];
-
-        if (String(account.rows[0].plan_id) === String(planId)) {
-            await client.query("COMMIT");
-
-            res.json({
-                message: "Account is already on this plan",
-                planId: String(planId),
-                planName: selectedPlan.name
+        if (
+            error instanceof Error &&
+            error.message === "Account not found"
+        ) {
+            res.status(404).json({
+                error: "Account not found"
             });
             return;
         }
 
-        await client.query(
-            "UPDATE accounts SET plan_id = $1 WHERE id = $2",
-            [planId, accountId]
-        );
-
-        await client.query(
-            `INSERT INTO plan_limit_history
-                (account_id, user_id, plan_id, plan_name,
-                 monthly_limit, max_per_request,
-                 effective_at, change_type)
-             VALUES
-                ($1, NULL, $2, $3, $4, $5,
-                 NOW(), 'account_plan_switch')`,
-            [
-                accountId,
-                selectedPlan.id,
-                selectedPlan.name,
-                selectedPlan.monthly_limit,
-                selectedPlan.max_per_request
-            ]
-        );
-
-        await client.query("COMMIT");
-
-        res.json({
-            message: "Account plan updated",
-            planId: String(planId),
-            planName: selectedPlan.name
-        });
-    } catch (error) {
-        await client.query("ROLLBACK");
         console.error("Plan assignment failed:", error);
         res.status(500).json({
             error: "Failed to update account plan"
         });
-    } finally {
-        client.release();
     }
 });
 
@@ -431,131 +288,43 @@ app.patch("/users/plan", authenticateAccount, async (req, res) => {
         return;
     }
 
-    const client = await pool.connect();
-
     try {
-        await client.query("BEGIN");
-
-        // Coordinate plan switching with consumption requests.
-        const account = await client.query(
-            `SELECT id
-             FROM accounts
-             WHERE id = $1
-             FOR UPDATE`,
-            [accountId]
+        const result = await changeUserPlanService.execute(
+            BigInt(accountId),
+            userId,
+            BigInt(planId)
         );
 
-        if (account.rowCount === 0) {
-            await client.query("ROLLBACK");
-
-            res.status(404).json({
-                error: "Account not found"
-            });
-            return;
-        }
-
-        // Find only users belonging to the authenticated account.
-        const user = await client.query(
-            `SELECT id, plan_id
-             FROM users
-             WHERE account_id = $1
-               AND external_user_id = $2`,
-            [accountId, userId.trim()]
-        );
-
-        if (user.rowCount === 0) {
-            await client.query("ROLLBACK");
-
+        res.status(200).json(result);
+    } catch (error) {
+        if (error instanceof UserNotFoundForPlanChangeError) {
             res.status(404).json({
                 error: "User not found in account"
             });
             return;
         }
 
-        // Allow predefined user plans or custom plans
-        // owned by this account.
-        const plan = await client.query(
-            `SELECT id, name, monthly_limit, max_per_request
-             FROM plans
-             WHERE id = $1
-               AND plan_type = 'user'
-               AND (
-                   owner_account_id IS NULL
-                   OR owner_account_id = $2
-               )`,
-            [planId, accountId]
-        );
-
-        if (plan.rowCount === 0) {
-            await client.query("ROLLBACK");
-
+        if (error instanceof InvalidUserPlanSelectionError) {
             res.status(400).json({
                 error: "Invalid or inaccessible user plan"
             });
             return;
         }
 
-        const selectedPlan = plan.rows[0];
-        const selectedUser = user.rows[0];
-
-        // Do not create duplicate history events.
-        if (String(selectedUser.plan_id) === String(planId)) {
-            await client.query("COMMIT");
-
-            res.json({
-                message: "User is already on this plan",
-                userId: userId.trim(),
-                planId: String(planId),
-                planName: selectedPlan.name
+        if (
+            error instanceof Error &&
+            error.message === "Account not found"
+        ) {
+            res.status(404).json({
+                error: "Account not found"
             });
             return;
         }
 
-        // Change the user's plan.
-        await client.query(
-            `UPDATE users
-             SET plan_id = $1
-             WHERE id = $2 AND account_id = $3`,
-            [planId, selectedUser.id, accountId]
-        );
-
-        // Record the exact quota limits that became effective.
-        await client.query(
-            `INSERT INTO plan_limit_history
-                (account_id, user_id, plan_id, plan_name,
-                 monthly_limit, max_per_request,
-                 effective_at, change_type)
-             VALUES
-                ($1, $2, $3, $4, $5, $6,
-                 NOW(), 'user_plan_switch')`,
-            [
-                accountId,
-                selectedUser.id,
-                selectedPlan.id,
-                selectedPlan.name,
-                selectedPlan.monthly_limit,
-                selectedPlan.max_per_request
-            ]
-        );
-
-        await client.query("COMMIT");
-
-        res.json({
-            message: "User plan updated",
-            userId: userId.trim(),
-            planId: String(planId),
-            planName: selectedPlan.name
-        });
-    } catch (error) {
-        await client.query("ROLLBACK");
-
         console.error("User plan update failed:", error);
-
         res.status(500).json({
             error: "Failed to update user plan"
         });
-    } finally {
-        client.release();
     }
 });
 
@@ -563,4 +332,3 @@ app.patch("/users/plan", authenticateAccount, async (req, res) => {
 app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
 });
-
