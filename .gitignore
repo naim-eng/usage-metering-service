@@ -8,3 +8,5 @@ coverage/
 
 # Local database backups
 backups/
+
+/src/generated/prisma

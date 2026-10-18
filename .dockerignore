@@ -28,3 +28,8 @@ results/
 
 # Development documentation
 README.md
+# Generate Prisma Client inside Docker, not on WSL
+src/generated/prisma/
+
+# Exclude local Prisma credentials
+prisma/.env

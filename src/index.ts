@@ -2,7 +2,8 @@ import { allowancesRouter } from "./allowances.js";
 import { reportsRouter } from "./reports.js";
 import { historyRouter } from "./history.js";
 import { plansRouter } from "./plans.js";
-import { consumeUnits } from "./consume.js";
+import { ConsumeCreditsService } from "./application/services/ConsumeCreditsService.js";
+import { prisma } from "./infrastructure/database/prisma.js";
 import { authenticateAccount } from "./auth.js";
 import express from "express";
 import { pool } from "./db.js";
@@ -10,6 +11,7 @@ import { pool } from "./db.js";
 import { generateApiKey, hashApiKey } from "./api-keys.js";
 
 const app = express();
+const consumeCreditsService = new ConsumeCreditsService(prisma);
 const PORT = Number(process.env.PORT ?? 3000);
 
 app.use(express.json());
@@ -273,13 +275,13 @@ app.post("/consume", authenticateAccount, async (req, res) => {
     }
 
     try {
-        const result = await consumeUnits(
-            accountId,
-            userId,
-            units,
-            requestId
-        );
 
+         const result = await consumeCreditsService.execute({
+    accountId: BigInt(accountId),
+    externalUserId: userId,
+    units: BigInt(units),
+    requestId
+});
         res.status(200).json(result);
     } catch (error) {
         const message =
