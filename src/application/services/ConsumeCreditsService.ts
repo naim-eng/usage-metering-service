@@ -1,10 +1,11 @@
-
 import type { PrismaClient } from "../../generated/prisma/client.js";
 
 import { QuotaPolicy } from "../../domain/services/QuotaPolicy.js";
+import { LowCreditNotificationPolicy } from "../../domain/services/LowCreditNotificationPolicy.js";
 import { AccountLockRepository } from "../../infrastructure/repositories/AccountLockRepository.js";
 import { UsageRepository } from "../../infrastructure/repositories/UsageRepository.js";
 import { IdempotencyRepository } from "../../infrastructure/repositories/IdempotencyRepository.js";
+import { LowCreditNotificationRepository } from "../../infrastructure/repositories/LowCreditNotificationRepository.js";
 
 export interface ConsumeCreditsInput {
     accountId: bigint;
@@ -27,6 +28,8 @@ export class ConsumeCreditsService {
     private readonly usageRepository = new UsageRepository();
     private readonly idempotencyRepository =
         new IdempotencyRepository();
+    private readonly notificationRepository =
+        new LowCreditNotificationRepository();
 
     constructor(private readonly prisma: PrismaClient) {}
 
@@ -191,6 +194,54 @@ export class ConsumeCreditsService {
 
                 if (!userUpdated) {
                     throw new Error("Concurrent user quota update");
+                }
+
+                // Create alerts only when accepted usage crosses
+                // a threshold. All writes share the transaction.
+                const accountUsedAfter =
+                    accountUsage.units_used + input.units;
+
+                const userUsedAfter =
+                    userUsage.units_used + input.units;
+
+                const accountThresholds =
+                    LowCreditNotificationPolicy.crossedThresholds(
+                        accountUsage.units_used,
+                        accountUsedAfter,
+                        accountPlan.monthly_limit
+                    );
+
+                for (const threshold of accountThresholds) {
+                    await this.notificationRepository.record(tx, {
+                        accountId: input.accountId,
+                        userId: null,
+                        monthStart,
+                        thresholdPercent: threshold,
+                        monthlyLimit: accountPlan.monthly_limit,
+                        unitsUsed: accountUsedAfter,
+                        remainingCredits:
+                            accountPlan.monthly_limit - accountUsedAfter
+                    });
+                }
+
+                const userThresholds =
+                    LowCreditNotificationPolicy.crossedThresholds(
+                        userUsage.units_used,
+                        userUsedAfter,
+                        userPlan.monthly_limit
+                    );
+
+                for (const threshold of userThresholds) {
+                    await this.notificationRepository.record(tx, {
+                        accountId: input.accountId,
+                        userId: user.id,
+                        monthStart,
+                        thresholdPercent: threshold,
+                        monthlyLimit: userPlan.monthly_limit,
+                        unitsUsed: userUsedAfter,
+                        remainingCredits:
+                            userPlan.monthly_limit - userUsedAfter
+                    });
                 }
             }
 

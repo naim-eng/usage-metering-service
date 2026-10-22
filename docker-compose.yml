@@ -14,6 +14,7 @@ services:
       - ./sql/002_seed_plans.sql:/docker-entrypoint-initdb.d/002_seed_plans.sql:ro
       - ./sql/003_plan_history.sql:/docker-entrypoint-initdb.d/003_plan_history.sql:ro
       - ./sql/004_idempotency_balances.sql:/docker-entrypoint-initdb.d/004_idempotency_balances.sql:ro
+      - ./sql/005_low_credit_notifications.sql:/docker-entrypoint-initdb.d/005_low_credit_notifications.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U metering -d usage_metering"]
       interval: 5s
@@ -48,6 +49,7 @@ services:
       - ./sql/002_seed_plans.sql:/docker-entrypoint-initdb.d/002_seed_plans.sql:ro
       - ./sql/003_plan_history.sql:/docker-entrypoint-initdb.d/003_plan_history.sql:ro
       - ./sql/004_idempotency_balances.sql:/docker-entrypoint-initdb.d/004_idempotency_balances.sql:ro
+      - ./sql/005_low_credit_notifications.sql:/docker-entrypoint-initdb.d/005_low_credit_notifications.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U metering -d usage_metering_demo"]
       interval: 5s
