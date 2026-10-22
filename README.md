@@ -1237,4 +1237,4 @@ The application implements DDD-inspired Clean Architecture, Prisma ORM, atomic q
 
 The implementation has passed TypeScript validation, automated unit and integration tests, and an isolated Docker Compose demonstration.
 
-Low-credit notifications have been implemented and tested on `feature/low-credit-notifications`, but have not yet been merged into `main` or deployed to the primary or demonstration databases.
+Low-credit notifications are implemented and merged into `main`. The feature has passed 27 HTTP integration tests and 6 notification policy tests. Deployment to the primary and demonstration databases remains pending migration `005_low_credit_notifications.sql`.
