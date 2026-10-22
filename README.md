@@ -25,6 +25,7 @@ The project was developed as a backend engineering capstone and includes automat
 - Historical tracking of consumption and plan revisions.
 - Account and user allowance inspection.
 - Monthly reporting with historical plan snapshots.
+- Database-backed low-credit notifications at 80%, 90%, and 100% usage.
 - Prisma ORM for application database operations.
 - DDD-inspired Clean Architecture.
 - Automated unit, integration, and regression tests.
@@ -95,6 +96,7 @@ src/plans.ts
 src/history.ts
 src/reports.ts
 src/allowances.ts
+src/notifications.ts
 ```
 
 The HTTP layer delegates business workflows to application services.
@@ -123,6 +125,7 @@ Services include:
 | GetUsageHistoryService | Retrieve paginated consumption history |
 | GetAllowancesService | Calculate account and user allowances |
 | GetMonthlyReportService | Generate historical monthly usage reports |
+| GetNotificationsService | Retrieve low-credit notifications |
 
 Application services coordinate validation of business rules, database operations, transactions, and the preparation of results.
 
@@ -149,6 +152,8 @@ The policy returns an acceptance or rejection decision identifying the relevant 
 
 The Domain layer does not require Express, Prisma, or PostgreSQL to evaluate these rules.
 
+The `LowCreditNotificationPolicy` detects when accepted consumption crosses a monthly usage threshold of 80%, 90%, or 100%. It uses integer arithmetic and does not depend on HTTP or database infrastructure.
+
 ### Infrastructure Layer
 
 The Infrastructure layer provides database connectivity and repository implementations.
@@ -162,7 +167,7 @@ src/infrastructure/repositories/
 
 The application uses Prisma ORM for typed database access.
 
-Infrastructure repositories support credit consumption and related transactional operations.
+Infrastructure repositories support credit consumption and related transactional operations. The `LowCreditNotificationRepository` stores notifications within the existing consumption transaction.
 
 PostgreSQL-specific SQL is retained where necessary for database row locking and in test utilities used to verify database state independently.
 
@@ -193,6 +198,7 @@ Prisma is used for:
 - Historical request retrieval.
 - Allowance inspection.
 - Monthly reporting.
+- Low-credit notification storage and retrieval.
 
 The existing SQL initialization scripts remain responsible for creating and initializing database tables.
 
@@ -325,6 +331,7 @@ The application prevents accounts from:
 - Accessing another account's user allowances.
 - Modifying another account's custom plans.
 - Assigning inaccessible custom plans.
+- Viewing another account's low-credit notifications.
 
 API keys and administrative credentials must never be committed to version control.
 
@@ -370,6 +377,7 @@ http://localhost:3000
 | POST | `/consume` | Evaluate and record consumption |
 | GET | `/usage/history` | Retrieve paginated request history |
 | GET | `/usage/monthly` | Retrieve monthly usage and plan history |
+| GET | `/notifications` | Retrieve account and user low-credit notifications |
 
 ### Example: Create a User
 
@@ -432,6 +440,67 @@ The report includes account and user usage totals, available historical plan lim
 
 Historical limits are not invented when the required plan-history information is unavailable.
 
+## Low-Credit Notifications
+
+The service creates notifications when an account or individual user reaches 80%, 90%, or 100% of its monthly credit limit through accepted consumption.
+
+| Usage threshold | Notification |
+|---|---|
+| 80% | Low credits |
+| 90% | Critical credits |
+| 100% | Credits exhausted |
+
+Notifications are created when usage crosses a threshold. If a request crosses multiple thresholds, a notification is recorded for each one.
+
+For example, with a monthly limit of five credits, consuming the fourth credit triggers the 80% notification. Consuming the fifth credit triggers both the 90% and 100% notifications.
+
+Notifications are stored in the `low_credit_notifications` table in PostgreSQL.
+
+Each notification records:
+
+- Account ID and optional user ID.
+- Month and threshold percentage.
+- Monthly limit.
+- Credits used and remaining.
+- Creation timestamp.
+
+The `LowCreditNotificationPolicy` identifies crossed thresholds, while `LowCreditNotificationRepository` saves them using the existing consumption transaction.
+
+Unique database indexes prevent duplicate notifications for the same account or user, month, and threshold.
+
+Rejected requests and idempotent retries do not create additional notifications.
+
+### Retrieve Notifications
+
+```http
+GET /notifications
+X-API-Key: <account-api-key>
+```
+
+The endpoint returns up to 100 notifications, ordered from newest to oldest.
+
+Notifications are restricted to the authenticated account.
+
+The response includes account-level and user-level notifications, their thresholds, remaining credits, and timestamps.
+
+Notifications are currently stored and retrieved through the API. Email, SMS, and push notification delivery are not implemented.
+
+Notifications are created when accepted consumption crosses a threshold. Existing usage is not checked retroactively, and plan changes alone do not generate notifications.
+
+### Database Migration
+
+The notification table is introduced by:
+
+```text
+sql/005_low_credit_notifications.sql
+```
+
+The migration has been applied and tested against `usage_metering_test`.
+
+It has not yet been applied to the primary `usage_metering` database or the isolated `usage_metering_demo` database.
+
+Before running notification-enabled code against either database, migration `005` must be reviewed and safely applied to the correct database. Otherwise, requests that attempt to create notifications may fail.
+
 ## Idempotency
 
 Every logical consumption request includes a client-supplied `requestId`.
@@ -485,6 +554,8 @@ A consistent locking order helps reduce concurrency conflicts.
 Accepted consumption updates the necessary account and user usage records within one transaction.
 
 Consumption decisions and idempotency records are also stored transactionally.
+
+Low-credit notifications are stored within the same transaction when applicable.
 
 If a transaction fails, its incomplete operations are rolled back.
 
@@ -671,6 +742,8 @@ Expected response:
 }
 ```
 
+For the notification feature branch, apply the required notification schema migration to the intended database before starting the API against that database.
+
 ## Docker Deployment
 
 The Docker Compose configuration provides separate main and demonstration services.
@@ -736,6 +809,8 @@ A successful demonstration ends with:
 Demo completed successfully!
 ```
 
+Notification-enabled Docker services require migration `005` to be applied to their respective databases before use.
+
 ### Stop Docker Services
 
 ```bash
@@ -755,9 +830,10 @@ The project contains multiple automated test suites.
 | Quota unit tests | 6 |
 | Domain policy tests | 6 |
 | Prisma consumption integration tests | 5 |
-| API integration tests, including the reporting regression test | 25 |
+| API integration tests, including reporting and notification tests | 27 |
+| Low-credit notification policy tests | 6 |
 
-Total: **42 automated test cases** across these suites.
+Total: 50 automated test cases across these suites.
 
 The monthly-reporting regression test performs 30 account-creation and reporting iterations within one test case.
 
@@ -792,13 +868,19 @@ The script:
 1. Prepares the isolated test database.
 2. Starts a temporary API on port 3001.
 3. Runs the main API integration tests.
-4. Runs the monthly-reporting regression test.
+4. Runs the monthly-reporting regression and notification tests.
 5. Stops the temporary server.
 
 ### Run Domain Tests
 
 ```bash
 npx tsx --test src/domain/services/QuotaPolicy.test.ts
+```
+
+### Run Low-Credit Notification Policy Tests
+
+```bash
+npx tsx --test src/domain/services/LowCreditNotificationPolicy.test.ts
 ```
 
 ### Run Prisma Integration Tests
@@ -848,6 +930,8 @@ The tests cover:
 - Monthly reporting.
 - Account and user allowances.
 - Immediate reporting after account creation.
+- Account and user low-credit notifications.
+- Notification deduplication, authentication, and tenant isolation.
 
 ## Example Client
 
@@ -926,6 +1010,7 @@ Core tables include:
 | `monthly_usage` | Monthly account and user usage totals |
 | `usage_requests` | Consumption decisions and idempotency records |
 | `plan_limit_history` | Historical plan assignments and revisions |
+| `low_credit_notifications` | Account and user threshold notifications |
 
 ### SQL Initialization Files
 
@@ -941,6 +1026,7 @@ sql/
 | `002_seed_plans.sql` | Predefined plan data |
 | `003_plan_history.sql` | Historical plan tracking |
 | `004_idempotency_balances.sql` | Recorded balances for idempotent retries |
+| `005_low_credit_notifications.sql` | Notification table, constraints, and indexes |
 
 These files remain part of the project after introducing Prisma.
 
@@ -969,6 +1055,7 @@ usage-metering-service/
 |   |-- 002_seed_plans.sql
 |   |-- 003_plan_history.sql
 |   |-- 004_idempotency_balances.sql
+|   |-- 005_low_credit_notifications.sql
 |
 |-- src/
 |   |-- index.ts
@@ -978,12 +1065,15 @@ usage-metering-service/
 |   |-- allowances.ts
 |   |-- history.ts
 |   |-- reports.ts
+|   |-- notifications.ts
 |   |-- db.ts
 |   |
 |   |-- domain/
 |   |   |-- services/
 |   |       |-- QuotaPolicy.ts
 |   |       |-- QuotaPolicy.test.ts
+|   |       |-- LowCreditNotificationPolicy.ts
+|   |       |-- LowCreditNotificationPolicy.test.ts
 |   |
 |   |-- application/
 |   |   |-- services/
@@ -997,17 +1087,20 @@ usage-metering-service/
 |   |       |-- GetUsageHistoryService.ts
 |   |       |-- GetAllowancesService.ts
 |   |       |-- GetMonthlyReportService.ts
+|   |       |-- GetNotificationsService.ts
 |   |       |-- ConsumeCreditsService.integration.test.ts
 |   |
 |   |-- infrastructure/
 |   |   |-- database/
 |   |   |-- repositories/
+|   |       |-- LowCreditNotificationRepository.ts
 |   |
 |   |-- generated/
 |   |   |-- prisma/
 |   |
 |   |-- integration.test.ts
 |   |-- monthly-report-regression.test.ts
+|   |-- low-credit-notifications.integration.test.ts
 |   |-- test-quota.ts
 |   |-- test-db.ts
 |   |-- load-test.ts
@@ -1080,6 +1173,12 @@ Client-supplied request IDs allow retries to return existing decisions without c
 
 Plan history is retained to support reports that distinguish past effective limits from current plan settings.
 
+### Low-Credit Notification Deduplication
+
+Notifications are recorded once per account or user, threshold, and UTC month.
+
+Notification records are saved in the same transaction as accepted consumption.
+
 ### Isolated Demonstration Environment
 
 The Docker demo has a separate database, allowing end-to-end examples without consuming credits from the primary application database.
@@ -1111,6 +1210,7 @@ Current limitations include:
 - No subscription billing or payment processing.
 - No graphical administration dashboard.
 - No production-scale performance testing.
+- No email, SMS, or push notification delivery.
 - Account-level locking may reduce throughput under heavy concurrent traffic.
 
 ## Project Verification
@@ -1121,13 +1221,13 @@ The refactored implementation has successfully completed:
 - 6 quota unit tests.
 - 6 Domain policy tests.
 - 5 Prisma consumption integration tests.
-- 25 HTTP integration tests, including the new monthly-reporting regression test.
+- 27 HTTP integration tests, including the monthly-reporting regression and notification tests.
+- 6 low-credit notification policy tests.
 - 30 immediate account-creation/reporting checks within the regression test.
 - Five consecutive successful runs of the original 24-test integration suite during stability verification.
 - A successful isolated Docker Compose demo with six passing checks.
 
 The project demonstrates practical backend engineering concepts including transactional consistency, account isolation, idempotency, atomic quota enforcement, Prisma ORM integration, and DDD-inspired separation of responsibilities.
-
 
 ## Project Status
 
@@ -1137,3 +1237,4 @@ The application implements DDD-inspired Clean Architecture, Prisma ORM, atomic q
 
 The implementation has passed TypeScript validation, automated unit and integration tests, and an isolated Docker Compose demonstration.
 
+Low-credit notifications have been implemented and tested on `feature/low-credit-notifications`, but have not yet been merged into `main` or deployed to the primary or demonstration databases.
