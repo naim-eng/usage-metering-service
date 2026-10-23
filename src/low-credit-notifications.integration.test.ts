@@ -218,6 +218,30 @@ test("Creates account and user notifications at 80% usage", async () => {
             );
         }
     }
+
+    // Verify transactional outbox events for all notification thresholds.
+    const events = await pool.query(
+        `SELECT event_type, deduplication_key, payload, status, attempts
+         FROM outbox_events
+         WHERE payload->>'accountId' = $1
+         ORDER BY deduplication_key`,
+        [String(accountId)]
+    );
+
+    assert.equal(events.rows.length, 6);
+    assert.equal(
+        new Set(events.rows.map((event) => event.deduplication_key)).size,
+        6
+    );
+
+    for (const event of events.rows) {
+        assert.equal(event.event_type, "quota.threshold.reached");
+        assert.equal(event.status, "pending");
+        assert.equal(event.attempts, 0);
+        assert.ok([80, 90, 100].includes(event.payload.thresholdPercent));
+        assert.ok(["account", "user"].includes(event.payload.scope));
+    }
+
 });
 
 test("Notification endpoint requires authentication and isolates accounts", async () => {

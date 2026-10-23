@@ -6,6 +6,7 @@ import { AccountLockRepository } from "../../infrastructure/repositories/Account
 import { UsageRepository } from "../../infrastructure/repositories/UsageRepository.js";
 import { IdempotencyRepository } from "../../infrastructure/repositories/IdempotencyRepository.js";
 import { LowCreditNotificationRepository } from "../../infrastructure/repositories/LowCreditNotificationRepository.js";
+import { QuotaEventProducer } from "../../infrastructure/events/QuotaEventProducer.js";
 
 export interface ConsumeCreditsInput {
     accountId: bigint;
@@ -30,6 +31,7 @@ export class ConsumeCreditsService {
         new IdempotencyRepository();
     private readonly notificationRepository =
         new LowCreditNotificationRepository();
+    private readonly eventProducer = new QuotaEventProducer();
 
     constructor(private readonly prisma: PrismaClient) {}
 
@@ -212,7 +214,7 @@ export class ConsumeCreditsService {
                     );
 
                 for (const threshold of accountThresholds) {
-                    await this.notificationRepository.record(tx, {
+                    const notification = {
                         accountId: input.accountId,
                         userId: null,
                         monthStart,
@@ -221,7 +223,10 @@ export class ConsumeCreditsService {
                         unitsUsed: accountUsedAfter,
                         remainingCredits:
                             accountPlan.monthly_limit - accountUsedAfter
-                    });
+                    };
+
+                    await this.notificationRepository.record(tx, notification);
+                    await this.eventProducer.publishThresholdReached(tx, notification);
                 }
 
                 const userThresholds =
@@ -232,7 +237,7 @@ export class ConsumeCreditsService {
                     );
 
                 for (const threshold of userThresholds) {
-                    await this.notificationRepository.record(tx, {
+                    const notification = {
                         accountId: input.accountId,
                         userId: user.id,
                         monthStart,
@@ -241,7 +246,10 @@ export class ConsumeCreditsService {
                         unitsUsed: userUsedAfter,
                         remainingCredits:
                             userPlan.monthly_limit - userUsedAfter
-                    });
+                    };
+
+                    await this.notificationRepository.record(tx, notification);
+                    await this.eventProducer.publishThresholdReached(tx, notification);
                 }
             }
 

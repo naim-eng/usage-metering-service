@@ -83,6 +83,13 @@ docker compose exec -T "$DB_SERVICE" \
     psql -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$TEST_DB" \
     < sql/005_low_credit_notifications.sql
 
+# Apply the event outbox migration to the test database only.
+echo "Applying event outbox migration..."
+
+docker compose exec -T "$DB_SERVICE" \
+    psql -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$TEST_DB" \
+    < sql/006_event_outbox.sql
+
 # Verify that the history table is available.
 HISTORY_EXISTS=$(docker compose exec -T "$DB_SERVICE" \
     psql -U "$DB_USER" -d "$TEST_DB" -Atqc \

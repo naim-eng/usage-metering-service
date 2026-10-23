@@ -86,7 +86,8 @@ echo "Running integration tests..."
 DB_NAME="$TEST_DB" npx tsx --test \
     src/integration.test.ts \
     src/monthly-report-regression.test.ts \
-    src/low-credit-notifications.integration.test.ts
+    src/low-credit-notifications.integration.test.ts \
+    src/infrastructure/events/QuotaEventConsumer.integration.test.ts
 
 echo ""
 echo "Integration tests completed successfully."

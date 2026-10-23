@@ -37,6 +37,22 @@ services:
       db:
         condition: service_healthy
 
+  consumer:
+    build: .
+    command: ["npm", "run", "consumer"]
+    restart: unless-stopped
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: metering
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: usage_metering
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles:
+      - events
+
   demo-db:
     image: postgres:17
     environment:
