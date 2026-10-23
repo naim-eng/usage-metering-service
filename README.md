@@ -1,4 +1,3 @@
-
 # Usage Metering and Quota Service
 
 A backend service for tracking resource consumption and enforcing configurable usage quotas across accounts and individual users.
@@ -26,6 +25,8 @@ The project was developed as a backend engineering capstone and includes automat
 - Account and user allowance inspection.
 - Monthly reporting with historical plan snapshots.
 - Database-backed low-credit notifications at 80%, 90%, and 100% usage.
+- Transactional event outbox for account and user quota-threshold events.
+- Independent Event Consumer with retry scheduling, crash recovery, and concurrent worker safety.
 - Prisma ORM for application database operations.
 - DDD-inspired Clean Architecture.
 - Automated unit, integration, and regression tests.
@@ -163,11 +164,14 @@ Key directories include:
 ```text
 src/infrastructure/database/
 src/infrastructure/repositories/
+src/infrastructure/events/
 ```
 
 The application uses Prisma ORM for typed database access.
 
 Infrastructure repositories support credit consumption and related transactional operations. The `LowCreditNotificationRepository` stores notifications within the existing consumption transaction.
+
+The `QuotaEventProducer` also writes threshold events into PostgreSQL within that transaction. The independent `QuotaEventConsumer` claims and processes queued events.
 
 PostgreSQL-specific SQL is retained where necessary for database row locking and in test utilities used to verify database state independently.
 
@@ -199,6 +203,7 @@ Prisma is used for:
 - Allowance inspection.
 - Monthly reporting.
 - Low-credit notification storage and retrieval.
+- Transactional outbox event creation and processing.
 
 The existing SQL initialization scripts remain responsible for creating and initializing database tables.
 
@@ -497,9 +502,67 @@ sql/005_low_credit_notifications.sql
 
 The migration has been applied and tested against `usage_metering_test`.
 
-It has not yet been applied to the primary `usage_metering` database or the isolated `usage_metering_demo` database.
+It has also been applied to the primary `usage_metering` database. The isolated `usage_metering_demo` database must be migrated separately before notification-enabled code is deployed there.
 
-Before running notification-enabled code against either database, migration `005` must be reviewed and safely applied to the correct database. Otherwise, requests that attempt to create notifications may fail.
+## Event Producer and Consumer
+
+The service uses a **transactional PostgreSQL outbox** to decouple quota-threshold event production from asynchronous processing. It does not require Kafka or RabbitMQ.
+
+When accepted consumption crosses an account or user threshold of 80%, 90%, or 100%, `QuotaEventProducer` writes a `quota.threshold.reached` event to the `outbox_events` table in the **same database transaction** as the usage update and low-credit notification. If the transaction rolls back, the event is not published.
+
+Each event includes the account ID, optional user ID, scope, UTC month, threshold percentage, monthly limit, credits used, and remaining credits. A unique deduplication key identifies the account or user, month, and threshold. Idempotent request replays do not publish additional events.
+
+### Event Consumer
+
+`QuotaEventConsumer` runs independently of the API and polls PostgreSQL for available events. It atomically claims an event using `FOR UPDATE SKIP LOCKED`, allowing concurrent consumers to avoid claiming the same event simultaneously.
+
+The consumer uses the event statuses `pending`, `processing`, `completed`, and `failed`. Successfully handled events are marked `completed` with a processing timestamp.
+
+Failure handling includes:
+
+- A 60-second processing lease and recovery of events abandoned by a crashed worker.
+- Up to five processing attempts.
+- Exponential retry delays of 5, 10, 20, and 40 seconds after unsuccessful attempts.
+- Terminal `failed` status and a recorded error after retries are exhausted.
+- Attempt-number and lease checks to prevent stale workers from marking superseded attempts as completed.
+
+The consumer currently **logs events** rather than sending emails, SMS, push notifications, or other external messages. Processing is designed around at-least-once delivery; external side-effect handlers would also need idempotency safeguards.
+
+### Implementation Files
+
+```text
+src/infrastructure/events/QuotaEventProducer.ts
+src/infrastructure/events/QuotaEventConsumer.ts
+src/infrastructure/events/run-consumer.ts
+src/infrastructure/events/run-test-consumer.ts
+src/infrastructure/events/QuotaEventConsumer.integration.test.ts
+```
+
+### Run the Consumer Locally
+
+```bash
+npm run consumer
+```
+
+The worker uses the configured PostgreSQL connection, checks for available events, and continues polling until stopped. Use `Ctrl+C` for graceful shutdown. For isolated development and tests, explicitly select `DB_NAME=usage_metering_test`.
+
+### Outbox Migration
+
+The outbox schema is defined in:
+
+```text
+sql/006_event_outbox.sql
+```
+
+Migration `006` creates `outbox_events` and an index for pending events. It has been applied and verified against `usage_metering_test` and the primary `usage_metering` database. A fresh primary database backup was taken before deployment. The demonstration database is separate and must be migrated before using the new event-enabled API there.
+
+For an existing PostgreSQL data volume, apply the migration explicitly; scripts under `/docker-entrypoint-initdb.d/` only execute when a new database volume is initialized.
+
+```bash
+docker compose exec -T db \
+  psql -v ON_ERROR_STOP=1 -U metering -d usage_metering \
+  < sql/006_event_outbox.sql
+```
 
 ## Idempotency
 
@@ -556,6 +619,8 @@ Accepted consumption updates the necessary account and user usage records within
 Consumption decisions and idempotency records are also stored transactionally.
 
 Low-credit notifications are stored within the same transaction when applicable.
+
+Quota-threshold outbox events are written in that same transaction when applicable.
 
 If a transaction fails, its incomplete operations are rolled back.
 
@@ -742,7 +807,7 @@ Expected response:
 }
 ```
 
-For the notification feature branch, apply the required notification schema migration to the intended database before starting the API against that database.
+Before starting the notification- and event-enabled API against an existing database, apply migrations `005` and `006` to that database as needed.
 
 ## Docker Deployment
 
@@ -754,6 +819,7 @@ The Docker Compose configuration provides separate main and demonstration servic
 |---|---|
 | `db` | Primary PostgreSQL database |
 | `api` | Main HTTP API |
+| `consumer` | Independent Event Consumer (enabled with the `events` profile) |
 
 Start the main application:
 
@@ -766,6 +832,22 @@ The main API is accessible at:
 ```text
 http://localhost:3000
 ```
+
+### Run the Docker Event Consumer
+
+The `consumer` service belongs to the optional `events` profile, so it does not start during an ordinary Docker Compose startup. After migration `006` is applied, start it with:
+
+```bash
+docker compose --profile events up -d --no-deps --build consumer
+```
+
+Inspect the worker logs with:
+
+```bash
+docker compose logs --tail=30 consumer
+```
+
+The Event Producer and Consumer were deployed and verified end-to-end against the primary `usage_metering` database. A threshold event was stored as `pending` and then processed as `completed` with one attempt.
 
 ### Isolated Demo Services
 
@@ -809,7 +891,7 @@ A successful demonstration ends with:
 Demo completed successfully!
 ```
 
-Notification-enabled Docker services require migration `005` to be applied to their respective databases before use.
+Notification- and event-enabled Docker services require migrations `005` and `006` to be applied to their respective databases before use.
 
 ### Stop Docker Services
 
@@ -831,9 +913,10 @@ The project contains multiple automated test suites.
 | Domain policy tests | 6 |
 | Prisma consumption integration tests | 5 |
 | API integration tests, including reporting and notification tests | 27 |
+| Event Consumer integration tests | 6 |
 | Low-credit notification policy tests | 6 |
 
-Total: 50 automated test cases across these suites.
+Total: 56 automated test cases across these suites.
 
 The monthly-reporting regression test performs 30 account-creation and reporting iterations within one test case.
 
@@ -868,8 +951,10 @@ The script:
 1. Prepares the isolated test database.
 2. Starts a temporary API on port 3001.
 3. Runs the main API integration tests.
-4. Runs the monthly-reporting regression and notification tests.
+4. Runs the monthly-reporting regression, notification, and Event Consumer tests.
 5. Stops the temporary server.
+
+The combined API and Event Consumer integration suite passed all 33 tests.
 
 ### Run Domain Tests
 
@@ -892,6 +977,15 @@ npx tsx --test src/application/services/ConsumeCreditsService.integration.test.t
 Prisma integration tests require an appropriately configured test-only `DATABASE_URL`.
 
 They validate that the target database is `usage_metering_test` before running database operations.
+
+### Run Event Consumer Integration Tests
+
+```bash
+DB_NAME=usage_metering_test \
+npx tsx --test src/infrastructure/events/QuotaEventConsumer.integration.test.ts
+```
+
+The six Event Consumer tests verify normal processing, expired-lease recovery, exhausted retries, concurrent event claiming, first-attempt handler failures, and final-attempt failures.
 
 ### Test Database Safety
 
@@ -932,6 +1026,8 @@ The tests cover:
 - Immediate reporting after account creation.
 - Account and user low-credit notifications.
 - Notification deduplication, authentication, and tenant isolation.
+- Transactional outbox event creation and deduplication.
+- Event Consumer processing, crash recovery, retries, and concurrent claims.
 
 ## Example Client
 
@@ -1011,6 +1107,7 @@ Core tables include:
 | `usage_requests` | Consumption decisions and idempotency records |
 | `plan_limit_history` | Historical plan assignments and revisions |
 | `low_credit_notifications` | Account and user threshold notifications |
+| `outbox_events` | Transactional quota-threshold events and processing state |
 
 ### SQL Initialization Files
 
@@ -1027,6 +1124,7 @@ sql/
 | `003_plan_history.sql` | Historical plan tracking |
 | `004_idempotency_balances.sql` | Recorded balances for idempotent retries |
 | `005_low_credit_notifications.sql` | Notification table, constraints, and indexes |
+| `006_event_outbox.sql` | Transactional outbox table and pending-event index |
 
 These files remain part of the project after introducing Prisma.
 
@@ -1056,6 +1154,7 @@ usage-metering-service/
 |   |-- 003_plan_history.sql
 |   |-- 004_idempotency_balances.sql
 |   |-- 005_low_credit_notifications.sql
+|   |-- 006_event_outbox.sql
 |
 |-- src/
 |   |-- index.ts
@@ -1094,6 +1193,12 @@ usage-metering-service/
 |   |   |-- database/
 |   |   |-- repositories/
 |   |       |-- LowCreditNotificationRepository.ts
+|   |   |-- events/
+|   |       |-- QuotaEventProducer.ts
+|   |       |-- QuotaEventConsumer.ts
+|   |       |-- QuotaEventConsumer.integration.test.ts
+|   |       |-- run-consumer.ts
+|   |       |-- run-test-consumer.ts
 |   |
 |   |-- generated/
 |   |   |-- prisma/
@@ -1179,6 +1284,10 @@ Notifications are recorded once per account or user, threshold, and UTC month.
 
 Notification records are saved in the same transaction as accepted consumption.
 
+### Transactional Event Outbox
+
+Quota-threshold events are committed together with accepted consumption and low-credit notifications. A separate PostgreSQL-backed consumer handles events asynchronously, using deduplication keys, leases, retries, and concurrent-safe claims without introducing an external message broker.
+
 ### Isolated Demonstration Environment
 
 The Docker demo has a separate database, allowing end-to-end examples without consuming credits from the primary application database.
@@ -1212,6 +1321,8 @@ Current limitations include:
 - No production-scale performance testing.
 - No email, SMS, or push notification delivery.
 - Account-level locking may reduce throughput under heavy concurrent traffic.
+- Event handling currently logs events; downstream integrations and external delivery are not implemented.
+- The consumer provides at-least-once processing rather than an exactly-once guarantee for external side effects.
 
 ## Project Verification
 
@@ -1226,6 +1337,9 @@ The refactored implementation has successfully completed:
 - 30 immediate account-creation/reporting checks within the regression test.
 - Five consecutive successful runs of the original 24-test integration suite during stability verification.
 - A successful isolated Docker Compose demo with six passing checks.
+- 6 Event Consumer integration tests, including crash recovery, retries, and concurrent event claiming.
+- A successful 33-test combined API and Event Consumer integration run.
+- Successful primary Docker deployment and end-to-end processing of a quota-threshold event.
 
 The project demonstrates practical backend engineering concepts including transactional consistency, account isolation, idempotency, atomic quota enforcement, Prisma ORM integration, and DDD-inspired separation of responsibilities.
 
@@ -1237,4 +1351,6 @@ The application implements DDD-inspired Clean Architecture, Prisma ORM, atomic q
 
 The implementation has passed TypeScript validation, automated unit and integration tests, and an isolated Docker Compose demonstration.
 
-Low-credit notifications are implemented and merged into `main`. The feature has passed 27 HTTP integration tests and 6 notification policy tests. Deployment to the primary and demonstration databases remains pending migration `005_low_credit_notifications.sql`.
+Low-credit notifications and the transactional Event Producer and Consumer are implemented, deployed to the primary Docker environment, and merged into `main`. The combined API and Event Consumer integration suite passed 33 tests, and the separate notification policy suite passed 6 tests. Migrations `005` and `006` have been applied to the primary `usage_metering` database. The isolated demonstration database remains separately managed and requires the appropriate migrations before deploying these features there.
+
+The project is published on GitHub at `https://github.com/naim-eng/usage-metering-service`, with local and remote `main` synchronized at commit `123029b` (`feat: add transactional event outbox producer and consumer`). The primary API, PostgreSQL database, and independent Docker Event Consumer were verified running successfully.
