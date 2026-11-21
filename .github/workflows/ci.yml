@@ -79,7 +79,7 @@ jobs:
         run: npm --prefix web run lint
 
       - name: Validate frontend TypeScript
-        run: cd web && npx tsc --noEmit
+        run: cd web && npx next typegen && npx tsc --noEmit
 
       - name: Build frontend
         run: npm --prefix web run build
