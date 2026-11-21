@@ -1,0 +1,57 @@
+name: Backend CI
+
+on:
+  push:
+    branches:
+      - main
+      - feature/saas-platform
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Typecheck and Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5433"
+      DB_USER: metering
+      DB_PASSWORD: ci_test_password_not_for_production
+      DB_NAME: usage_metering_test
+      ADMIN_API_KEY: ci_test_admin_key_not_for_production
+      PORT: "3001"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      - name: Validate TypeScript
+        run: npm run typecheck
+
+      - name: Start PostgreSQL
+        run: docker compose up -d --wait db
+
+      - name: Run automated tests
+        run: npm test
+
+      - name: Stop test containers
+        if: always()
+        run: docker compose down
