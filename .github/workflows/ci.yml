@@ -82,4 +82,8 @@ jobs:
         run: cd web && npx next typegen && npx tsc --noEmit
 
       - name: Build frontend
+        env:
+          AUTH_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/ci_build_only
+          BETTER_AUTH_SECRET: ci-only-placeholder-secret-never-use-in-production
+          BETTER_AUTH_URL: http://localhost:3002
         run: npm --prefix web run build
