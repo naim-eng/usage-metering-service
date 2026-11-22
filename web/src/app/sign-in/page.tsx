@@ -31,6 +31,24 @@ export default function SignInPage() {
         return;
       }
 
+      const organizations = await authClient.organization.list();
+
+      if (organizations.error) {
+        setError("Signed in, but unable to load your workspaces.");
+        return;
+      }
+
+      if (organizations.data?.length === 1) {
+        const active = await authClient.organization.setActive({
+          organizationId: organizations.data[0].id,
+        });
+
+        if (active.error) {
+          setError("Signed in, but unable to select your workspace.");
+          return;
+        }
+      }
+
       router.replace("/");
       router.refresh();
     } catch {

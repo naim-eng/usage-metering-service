@@ -43,7 +43,11 @@ const metrics = [
   },
 ];
 
-export default function Home() {
+export default function DashboardPreview({
+  organizationName,
+}: {
+  organizationName: string | null;
+}) {
   return (
     <div className="min-h-screen bg-[#f7f8fc] text-slate-900">
       <div className="flex min-h-screen">
@@ -100,7 +104,9 @@ export default function Home() {
           <header className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 bg-white px-6 py-5 md:px-10">
             <div>
               <p className="text-xs font-medium text-slate-400">
-                Workspace / Overview
+                {organizationName
+                  ? `${organizationName} / Overview`
+                  : "Workspace / Overview"}
               </p>
               <h1 className="mt-1 text-xl font-bold tracking-tight">
                 Dashboard
