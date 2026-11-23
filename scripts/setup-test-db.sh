@@ -75,7 +75,6 @@ docker compose exec -T "$DB_SERVICE" \
     psql -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$TEST_DB" \
     < sql/004_idempotency_balances.sql
 
-
 # Apply the low-credit notification migration to the test database only.
 echo "Applying low-credit notifications migration..."
 
@@ -90,12 +89,12 @@ docker compose exec -T "$DB_SERVICE" \
     psql -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$TEST_DB" \
     < sql/006_event_outbox.sql
 
-
-
 # Initialize Better Auth tables in a fresh test database.
 echo "Checking Better Auth schema..."
 
-AUTH_TABLE_COUNT=$(docker compose exec -T "$DB_SERVICE"     psql -X -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$TEST_DB" -Atqc     "SELECT COUNT(*) FROM information_schema.tables
+AUTH_TABLE_COUNT=$(docker compose exec -T "$DB_SERVICE" \
+    psql -X -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$TEST_DB" -Atqc \
+    "SELECT COUNT(*) FROM information_schema.tables
      WHERE table_schema = 'auth'
      AND table_name IN
      ('user', 'session', 'account', 'verification',
@@ -103,9 +102,15 @@ AUTH_TABLE_COUNT=$(docker compose exec -T "$DB_SERVICE"     psql -X -v ON_ERROR_
 
 if [[ "$AUTH_TABLE_COUNT" == "0" ]]; then
     echo "Initializing Better Auth schema..."
-    docker compose exec -T "$DB_SERVICE"         psql -X -v ON_ERROR_STOP=1 -1         -U "$DB_USER" -d "$TEST_DB"         -f - < sql/007_customer_auth.sql
+
+    docker compose exec -T "$DB_SERVICE" \
+        psql -X -v ON_ERROR_STOP=1 -1 \
+        -U "$DB_USER" -d "$TEST_DB" -f - \
+        < sql/007_customer_auth.sql
+
 elif [[ "$AUTH_TABLE_COUNT" == "7" ]]; then
     echo "Better Auth schema already exists."
+
 else
     echo "ERROR: Incomplete Better Auth schema."
     exit 1
@@ -114,10 +119,20 @@ fi
 # Apply the projects migration only if the table is missing.
 echo "Checking customer projects migration..."
 
-PROJECTS_EXISTS=$(docker compose exec -T "$DB_SERVICE" psql -X -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$TEST_DB" -Atqc "SELECT CASE WHEN to_regclass('public.projects') IS NOT NULL THEN 1 ELSE 0 END;")
+PROJECTS_EXISTS=$(docker compose exec -T "$DB_SERVICE" \
+    psql -X -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$TEST_DB" -Atqc \
+    "SELECT CASE
+       WHEN to_regclass('public.projects') IS NOT NULL
+       THEN 1 ELSE 0
+     END;")
 
 if [[ "$PROJECTS_EXISTS" == "0" ]]; then
-    AUTH_EXISTS=$(docker compose exec -T "$DB_SERVICE" psql -X -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$TEST_DB" -Atqc "SELECT CASE WHEN to_regclass('auth.organization') IS NOT NULL THEN 1 ELSE 0 END;")
+    AUTH_EXISTS=$(docker compose exec -T "$DB_SERVICE" \
+        psql -X -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$TEST_DB" -Atqc \
+        "SELECT CASE
+           WHEN to_regclass('auth.organization') IS NOT NULL
+           THEN 1 ELSE 0
+         END;")
 
     if [[ "$AUTH_EXISTS" != "1" ]]; then
         echo "ERROR: auth.organization is missing from the test database."
@@ -125,9 +140,40 @@ if [[ "$PROJECTS_EXISTS" == "0" ]]; then
     fi
 
     echo "Applying customer projects migration..."
-    docker compose exec -T "$DB_SERVICE" psql -X -v ON_ERROR_STOP=1 -1 -U "$DB_USER" -d "$TEST_DB" -f - < sql/008_customer_projects.sql
+
+    docker compose exec -T "$DB_SERVICE" \
+        psql -X -v ON_ERROR_STOP=1 -1 \
+        -U "$DB_USER" -d "$TEST_DB" -f - \
+        < sql/008_customer_projects.sql
+
 else
     echo "Projects table already exists. Skipping migration 008."
+fi
+
+# Apply the project API keys migration only if the table is missing.
+echo "Checking project API keys migration..."
+
+PROJECT_API_KEYS_EXISTS=$(docker compose exec -T "$DB_SERVICE" \
+    psql -X -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$TEST_DB" -Atqc \
+    "SELECT CASE
+       WHEN to_regclass('public.project_api_keys') IS NOT NULL
+       THEN 1 ELSE 0
+     END;")
+
+if [[ "$PROJECT_API_KEYS_EXISTS" == "0" ]]; then
+    echo "Applying project API keys migration..."
+
+    docker compose exec -T "$DB_SERVICE" \
+        psql -X -v ON_ERROR_STOP=1 -1 \
+        -U "$DB_USER" -d "$TEST_DB" -f - \
+        < sql/009_project_api_keys.sql
+
+elif [[ "$PROJECT_API_KEYS_EXISTS" == "1" ]]; then
+    echo "Project API keys table already exists. Skipping migration 009."
+
+else
+    echo "ERROR: Could not determine project API keys migration status."
+    exit 1
 fi
 
 # Verify that the history table is available.

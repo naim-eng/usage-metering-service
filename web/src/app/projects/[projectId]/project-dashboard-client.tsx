@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import ProjectApiKeys from "./project-api-keys";
 
 type Project = {
   id: string;
@@ -468,6 +469,8 @@ export default function ProjectDashboardClient({
                 </div>
               </div>
             </Section>
+
+            <ProjectApiKeys projectId={projectId} />
 
             <Section
               title="User allowances"

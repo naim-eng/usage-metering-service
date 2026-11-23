@@ -18,9 +18,12 @@ export async function authenticateAccount(
     }
 
     try {
-        const account = await prisma.accounts.findUnique({
+        const keyHash = hashApiKey(apiKey);
+
+        // Preserve support for existing account API keys.
+        let account = await prisma.accounts.findUnique({
             where: {
-                api_key_hash: hashApiKey(apiKey)
+                api_key_hash: keyHash
             },
             select: {
                 id: true,
@@ -28,6 +31,42 @@ export async function authenticateAccount(
                 plan_id: true
             }
         });
+
+        // If the key is not an account key, check project API keys.
+        if (!account) {
+            const projectKey = await prisma.project_api_keys.findUnique({
+                where: {
+                    key_hash: keyHash
+                },
+                select: {
+                    revoked_at: true,
+                    project: {
+                        select: {
+                            status: true,
+                            metering_account_id: true
+                        }
+                    }
+                }
+            });
+
+            if (
+                projectKey &&
+                projectKey.revoked_at === null &&
+                projectKey.project.status === "active" &&
+                projectKey.project.metering_account_id !== null
+            ) {
+                account = await prisma.accounts.findUnique({
+                    where: {
+                        id: projectKey.project.metering_account_id
+                    },
+                    select: {
+                        id: true,
+                        name: true,
+                        plan_id: true
+                    }
+                });
+            }
+        }
 
         if (!account) {
             res.status(401).json({
@@ -46,6 +85,7 @@ export async function authenticateAccount(
         next();
     } catch (error) {
         console.error("Authentication failed:", error);
+
         res.status(500).json({
             error: "Internal server error"
         });

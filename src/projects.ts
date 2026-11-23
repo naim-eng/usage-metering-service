@@ -1,3 +1,4 @@
+
 import { Router } from "express";
 import { Prisma } from "./generated/prisma/client.js";
 import { prisma } from "./infrastructure/database/prisma.js";
@@ -10,6 +11,12 @@ import { GetAllowancesService } from "./application/services/GetAllowancesServic
 import { GetMonthlyReportService } from "./application/services/GetMonthlyReportService.js";
 import { GetUsageHistoryService } from "./application/services/GetUsageHistoryService.js";
 import { GetNotificationsService } from "./application/services/GetNotificationsService.js";
+import {
+    ManageProjectApiKeysService,
+    ProjectNotFoundError,
+    ProjectApiKeyNotFoundError,
+    InvalidProjectApiKeyNameError
+} from "./application/services/ManageProjectApiKeysService.js";
 
 export const projectsRouter = Router();
 
@@ -19,15 +26,25 @@ const allowancesService = new GetAllowancesService(prisma);
 const monthlyReportService = new GetMonthlyReportService(prisma);
 const usageHistoryService = new GetUsageHistoryService(prisma);
 const notificationsService = new GetNotificationsService(prisma);
+const apiKeysService = new ManageProjectApiKeysService(prisma);
 
+function isAuthorized(adminKey: string | undefined): boolean {
+    return Boolean(
+        process.env.ADMIN_API_KEY &&
+        adminKey === process.env.ADMIN_API_KEY
+    );
+}
+
+function validIdentifier(value: unknown): value is string {
+    return (
+        typeof value === "string" &&
+        value.trim().length > 0 &&
+        value.length <= 128
+    );
+}
 
 projectsRouter.get("/", async (req, res) => {
-    const adminKey = req.header("X-Admin-Key");
-
-    if (
-        !process.env.ADMIN_API_KEY ||
-        adminKey !== process.env.ADMIN_API_KEY
-    ) {
+    if (!isAuthorized(req.header("X-Admin-Key"))) {
         res.status(401).json({ error: "Unauthorized" });
         return;
     }
@@ -37,7 +54,7 @@ projectsRouter.get("/", async (req, res) => {
             ? req.query.organizationId.trim()
             : "";
 
-    if (!organizationId || organizationId.length > 128) {
+    if (!validIdentifier(organizationId)) {
         res.status(400).json({ error: "Invalid organization ID" });
         return;
     }
@@ -76,15 +93,9 @@ projectsRouter.get("/", async (req, res) => {
     }
 });
 
-
 // Retrieve dashboard data for an organization-owned project.
 projectsRouter.get("/:projectId/dashboard", async (req, res) => {
-    const adminKey = req.header("X-Admin-Key");
-
-    if (
-        !process.env.ADMIN_API_KEY ||
-        adminKey !== process.env.ADMIN_API_KEY
-    ) {
+    if (!isAuthorized(req.header("X-Admin-Key"))) {
         res.status(401).json({ error: "Unauthorized" });
         return;
     }
@@ -97,10 +108,8 @@ projectsRouter.get("/:projectId/dashboard", async (req, res) => {
             : "";
 
     if (
-        !projectId ||
-        projectId.length > 128 ||
-        !organizationId ||
-        organizationId.length > 128
+        !validIdentifier(projectId) ||
+        !validIdentifier(organizationId)
     ) {
         res.status(400).json({
             error: "Invalid project or organization ID"
@@ -234,12 +243,7 @@ projectsRouter.get("/:projectId/dashboard", async (req, res) => {
 });
 
 projectsRouter.post("/", async (req, res) => {
-    const adminKey = req.header("X-Admin-Key");
-
-    if (
-        !process.env.ADMIN_API_KEY ||
-        adminKey !== process.env.ADMIN_API_KEY
-    ) {
+    if (!isAuthorized(req.header("X-Admin-Key"))) {
         res.status(401).json({ error: "Unauthorized" });
         return;
     }
@@ -292,5 +296,133 @@ projectsRouter.post("/", async (req, res) => {
 
         console.error("Project creation failed:", error);
         res.status(500).json({ error: "Failed to create project" });
+    }
+});
+
+// Create a new API key for an organization-owned project.
+projectsRouter.post("/:projectId/api-keys", async (req, res) => {
+    if (!isAuthorized(req.header("X-Admin-Key"))) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+    }
+
+    const projectId = req.params.projectId;
+    const { organizationId, name } = req.body ?? {};
+
+    if (
+        !validIdentifier(projectId) ||
+        !validIdentifier(organizationId) ||
+        typeof name !== "string"
+    ) {
+        res.status(400).json({ error: "Invalid API key details" });
+        return;
+    }
+
+    try {
+        const result = await apiKeysService.create(
+            organizationId.trim(),
+            projectId.trim(),
+            name
+        );
+
+        res.setHeader("Cache-Control", "no-store");
+        res.status(201).json(result);
+    } catch (error) {
+        if (error instanceof ProjectNotFoundError) {
+            res.status(404).json({ error: "Project not found" });
+            return;
+        }
+
+        if (error instanceof InvalidProjectApiKeyNameError) {
+            res.status(400).json({ error: "Invalid API key name" });
+            return;
+        }
+
+        console.error("Project API key creation failed:", error);
+        res.status(500).json({ error: "Failed to create API key" });
+    }
+});
+
+// List API keys without returning their hashes or plaintext secrets.
+projectsRouter.get("/:projectId/api-keys", async (req, res) => {
+    if (!isAuthorized(req.header("X-Admin-Key"))) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+    }
+
+    const projectId = req.params.projectId;
+    const organizationId = req.query.organizationId;
+
+    if (
+        !validIdentifier(projectId) ||
+        !validIdentifier(organizationId)
+    ) {
+        res.status(400).json({
+            error: "Invalid project or organization ID"
+        });
+        return;
+    }
+
+    try {
+        const apiKeys = await apiKeysService.list(
+            organizationId.trim(),
+            projectId.trim()
+        );
+
+        res.setHeader("Cache-Control", "no-store");
+        res.status(200).json({ apiKeys });
+    } catch (error) {
+        if (error instanceof ProjectNotFoundError) {
+            res.status(404).json({ error: "Project not found" });
+            return;
+        }
+
+        console.error("Project API key listing failed:", error);
+        res.status(500).json({ error: "Failed to list API keys" });
+    }
+});
+
+// Revoke an individual project API key.
+projectsRouter.delete("/:projectId/api-keys/:keyId", async (req, res) => {
+    if (!isAuthorized(req.header("X-Admin-Key"))) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+    }
+
+    const projectId = req.params.projectId;
+    const keyId = req.params.keyId;
+    const organizationId = req.query.organizationId;
+
+    if (
+        !validIdentifier(projectId) ||
+        !validIdentifier(keyId) ||
+        !validIdentifier(organizationId)
+    ) {
+        res.status(400).json({
+            error: "Invalid project, organization, or key ID"
+        });
+        return;
+    }
+
+    try {
+        const result = await apiKeysService.revoke(
+            organizationId.trim(),
+            projectId.trim(),
+            keyId.trim()
+        );
+
+        res.setHeader("Cache-Control", "no-store");
+        res.status(200).json(result);
+    } catch (error) {
+        if (
+            error instanceof ProjectNotFoundError ||
+            error instanceof ProjectApiKeyNotFoundError
+        ) {
+            res.status(404).json({ error: "API key not found" });
+            return;
+        }
+
+        console.error("Project API key revocation failed:", error);
+        res.status(500).json({ error: "Failed to revoke API key" });
     }
 });

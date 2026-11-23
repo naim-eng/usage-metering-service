@@ -88,7 +88,9 @@ DB_NAME="$TEST_DB" npx tsx --test \
     src/monthly-report-regression.test.ts \
     src/low-credit-notifications.integration.test.ts \
     src/infrastructure/events/QuotaEventConsumer.integration.test.ts \
-    src/application/services/CreateProjectService.integration.test.ts
+    src/application/services/CreateProjectService.integration.test.ts \
+    src/application/services/ManageProjectApiKeysService.integration.test.ts \
+    src/project-api-key-auth.integration.test.ts
 
 echo ""
 echo "Integration tests completed successfully."
