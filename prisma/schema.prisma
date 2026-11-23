@@ -143,3 +143,16 @@ model outbox_events {
   processed_at      DateTime? @db.Timestamptz(6)
   last_error        String?   @db.Text
 }
+
+model projects {
+  id                  String   @id
+  organization_id     String
+  name                String   @db.VarChar(100)
+  slug                String   @db.VarChar(100)
+  metering_account_id BigInt?  @unique
+  status              String   @default("pending") @db.VarChar(20)
+  created_at          DateTime @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([organization_id, slug])
+}

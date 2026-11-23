@@ -90,6 +90,46 @@ docker compose exec -T "$DB_SERVICE" \
     psql -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$TEST_DB" \
     < sql/006_event_outbox.sql
 
+
+
+# Initialize Better Auth tables in a fresh test database.
+echo "Checking Better Auth schema..."
+
+AUTH_TABLE_COUNT=$(docker compose exec -T "$DB_SERVICE"     psql -X -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$TEST_DB" -Atqc     "SELECT COUNT(*) FROM information_schema.tables
+     WHERE table_schema = 'auth'
+     AND table_name IN
+     ('user', 'session', 'account', 'verification',
+      'organization', 'member', 'invitation');")
+
+if [[ "$AUTH_TABLE_COUNT" == "0" ]]; then
+    echo "Initializing Better Auth schema..."
+    docker compose exec -T "$DB_SERVICE"         psql -X -v ON_ERROR_STOP=1 -1         -U "$DB_USER" -d "$TEST_DB"         -f - < sql/007_customer_auth.sql
+elif [[ "$AUTH_TABLE_COUNT" == "7" ]]; then
+    echo "Better Auth schema already exists."
+else
+    echo "ERROR: Incomplete Better Auth schema."
+    exit 1
+fi
+
+# Apply the projects migration only if the table is missing.
+echo "Checking customer projects migration..."
+
+PROJECTS_EXISTS=$(docker compose exec -T "$DB_SERVICE" psql -X -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$TEST_DB" -Atqc "SELECT CASE WHEN to_regclass('public.projects') IS NOT NULL THEN 1 ELSE 0 END;")
+
+if [[ "$PROJECTS_EXISTS" == "0" ]]; then
+    AUTH_EXISTS=$(docker compose exec -T "$DB_SERVICE" psql -X -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$TEST_DB" -Atqc "SELECT CASE WHEN to_regclass('auth.organization') IS NOT NULL THEN 1 ELSE 0 END;")
+
+    if [[ "$AUTH_EXISTS" != "1" ]]; then
+        echo "ERROR: auth.organization is missing from the test database."
+        exit 1
+    fi
+
+    echo "Applying customer projects migration..."
+    docker compose exec -T "$DB_SERVICE" psql -X -v ON_ERROR_STOP=1 -1 -U "$DB_USER" -d "$TEST_DB" -f - < sql/008_customer_projects.sql
+else
+    echo "Projects table already exists. Skipping migration 008."
+fi
+
 # Verify that the history table is available.
 HISTORY_EXISTS=$(docker compose exec -T "$DB_SERVICE" \
     psql -U "$DB_USER" -d "$TEST_DB" -Atqc \

@@ -13,6 +13,13 @@ export class GetNotificationsService {
                     { created_at: "desc" },
                     { id: "desc" }
                 ],
+                include: {
+                    users: {
+                        select: {
+                            external_user_id: true
+                        }
+                    }
+                },
                 take: 100
             });
 
@@ -22,7 +29,7 @@ export class GetNotificationsService {
                 scope: notification.user_id === null
                     ? "account"
                     : "user",
-                userId: notification.user_id?.toString() ?? null,
+                userId: notification.users?.external_user_id ?? null,
                 month: notification.month_start
                     .toISOString()
                     .slice(0, 7),

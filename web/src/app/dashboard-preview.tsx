@@ -1,13 +1,14 @@
+import Link from "next/link";
 import SignOutButton from "./sign-out-button";
 
 const navigation = [
-  "Overview",
-  "Projects",
-  "Usage Analytics",
-  "Quotas & Plans",
-  "API Keys",
-  "Notifications",
-  "Settings",
+  { label: "Overview", href: "/", available: true },
+  { label: "Projects", href: "/projects", available: true },
+  { label: "Usage Analytics", href: "#", available: false },
+  { label: "Quotas & Plans", href: "#", available: false },
+  { label: "API Keys", href: "#", available: false },
+  { label: "Notifications", href: "#", available: false },
+  { label: "Settings", href: "#", available: false },
 ];
 
 const activity = [
@@ -70,23 +71,24 @@ export default function DashboardPreview({
             </p>
 
             <nav className="space-y-1" aria-label="Dashboard navigation">
-              {navigation.map((item, index) => (
-                <div
-                  key={item}
-                  className={`flex items-center justify-between rounded-lg px-3 py-3 text-sm ${
-                    index === 0
-                      ? "bg-indigo-50 font-semibold text-indigo-700"
-                      : "text-slate-500"
-                  }`}
-                >
-                  <span>{item}</span>
-                  {index !== 0 && (
-                    <span className="text-[10px] text-slate-400">
-                      Soon
-                    </span>
-                  )}
-                </div>
-              ))}
+              {navigation.map((item) => {
+                const classes = `flex items-center justify-between rounded-lg px-3 py-3 text-sm ${
+                  item.href === "/"
+                    ? "bg-indigo-50 font-semibold text-indigo-700"
+                    : "text-slate-500"
+                }`;
+
+                return item.available ? (
+                  <Link key={item.label} href={item.href} className={classes}>
+                    <span>{item.label}</span>
+                  </Link>
+                ) : (
+                  <div key={item.label} className={classes}>
+                    <span>{item.label}</span>
+                    <span className="text-[10px] text-slate-400">Soon</span>
+                  </div>
+                );
+              })}
             </nav>
           </div>
 

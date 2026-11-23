@@ -1,3 +1,4 @@
+import { projectsRouter } from "./projects.js";
 
 import { allowancesRouter } from "./allowances.js";
 import { notificationsRouter } from "./notifications.js";
@@ -43,6 +44,8 @@ const listPlansService = new ListPlansService(prisma);
 const PORT = Number(process.env.PORT ?? 3000);
 
 app.use(express.json());
+
+app.use("/projects", projectsRouter);
 
 // Health check endpoint.
 app.get("/health", (req, res) => {

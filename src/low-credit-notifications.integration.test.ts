@@ -323,3 +323,92 @@ test("Notification endpoint requires authentication and isolates accounts", asyn
     assert.equal(otherNotifications.status, 200);
     assert.deepEqual(otherNotifications.data.notifications, []);
 });
+
+test("User notifications expose external user IDs and remain account-isolated", async () => {
+    const adminKey = process.env.ADMIN_API_KEY;
+    assert.ok(adminKey, "ADMIN_API_KEY is required");
+
+    const accountA = await request(
+        "POST",
+        "/accounts",
+        {
+            name: `User Notification A ${randomUUID()}`,
+            planId: 1
+        },
+        { "X-Admin-Key": adminKey }
+    );
+
+    const accountB = await request(
+        "POST",
+        "/accounts",
+        {
+            name: `User Notification B ${randomUUID()}`,
+            planId: 1
+        },
+        { "X-Admin-Key": adminKey }
+    );
+
+    assert.equal(accountA.status, 201);
+    assert.equal(accountB.status, 201);
+
+    const externalUserId = `external-notify-${randomUUID()}`;
+
+    const registered = await request(
+        "POST",
+        "/users",
+        {
+            userId: externalUserId,
+            planId: 3
+        },
+        { "X-API-Key": accountA.data.apiKey }
+    );
+
+    assert.equal(registered.status, 201);
+
+    const internalUserId = registered.data.user.id;
+
+    assert.ok(internalUserId);
+
+    // Insert a user-owned notification using its internal database ID.
+    await pool.query(
+        `INSERT INTO low_credit_notifications
+            (account_id, user_id, month_start,
+             threshold_percent, monthly_limit,
+             units_used, remaining_credits)
+         VALUES ($1, $2, DATE '2026-11-01',
+                 80, 10, 8, 2)`,
+        [accountA.data.account.id, internalUserId]
+    );
+
+    const ownNotifications = await request(
+        "GET",
+        "/notifications",
+        undefined,
+        { "X-API-Key": accountA.data.apiKey }
+    );
+
+    assert.equal(ownNotifications.status, 200);
+    assert.equal(ownNotifications.data.notifications.length, 1);
+
+    const notification = ownNotifications.data.notifications[0];
+
+    assert.equal(notification.scope, "user");
+    assert.equal(notification.userId, externalUserId);
+    assert.notEqual(notification.userId, String(internalUserId));
+    assert.equal(notification.thresholdPercent, 80);
+    assert.equal(notification.monthlyLimit, "10");
+    assert.equal(notification.unitsUsed, "8");
+    assert.equal(notification.remainingCredits, "2");
+    assert.equal(notification.month, "2026-11");
+
+    // A different account must not see this user's notification.
+    const otherNotifications = await request(
+        "GET",
+        "/notifications",
+        undefined,
+        { "X-API-Key": accountB.data.apiKey }
+    );
+
+    assert.equal(otherNotifications.status, 200);
+    assert.deepEqual(otherNotifications.data.notifications, []);
+});

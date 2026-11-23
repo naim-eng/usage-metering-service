@@ -22,7 +22,7 @@ export class GetUsageHistoryService {
                 { id: "desc" }
             ],
             skip: offset,
-            take: input.limit,
+            take: input.limit + 1,
             select: {
                 request_id: true,
                 units_requested: true,
@@ -38,10 +38,14 @@ export class GetUsageHistoryService {
             }
         });
 
+        const hasMore = requests.length > input.limit;
+        const pageRequests = requests.slice(0, input.limit);
+
         return {
             page: input.page,
             limit: input.limit,
-            history: requests.map(request => ({
+            hasMore,
+            history: pageRequests.map(request => ({
                 request_id: request.request_id,
                 user_id:
                     request

@@ -23,6 +23,14 @@ export const auth = betterAuth({
   appName: "Usage Metering",
 
   baseURL,
+  trustedOrigins: [
+    baseURL,
+    ...(process.env.BETTER_AUTH_TRUSTED_ORIGINS ?? "")
+      .split(",")
+      .map((origin) => origin.trim())
+      .filter(Boolean),
+  ],
+
   secret,
 
   database: {
