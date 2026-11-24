@@ -145,6 +145,68 @@ test("Concurrent consumers cannot claim the same event twice", async () => {
     assert.ok(updated.processed_at);
 });
 
+test("Consumer cannot complete an event after its lease expires", async () => {
+    const event = await prisma.outbox_events.create({
+        data: {
+            event_type: "quota.threshold.reached",
+            deduplication_key: `test:expired-during-processing:${randomUUID()}`,
+            payload: {
+                test: true,
+                scenario: "lease-expired-during-processing"
+            }
+        }
+    });
+
+    let handlerStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+        handlerStarted = resolve;
+    });
+
+    let releaseHandler!: () => void;
+    const release = new Promise<void>((resolve) => {
+        releaseHandler = resolve;
+    });
+
+    const consumer = new QuotaEventConsumer(prisma, async () => {
+        handlerStarted();
+        await release;
+    });
+
+    const processing = consumer.processOne(event.id);
+
+    await started;
+
+    try {
+        const claimed = await prisma.outbox_events.findUniqueOrThrow({
+            where: { id: event.id }
+        });
+
+        assert.equal(claimed.status, "processing");
+        assert.equal(claimed.attempts, 1);
+
+        await prisma.outbox_events.update({
+            where: { id: event.id },
+            data: {
+                available_at: new Date("2020-01-01T00:00:00.000Z")
+            }
+        });
+    } finally {
+        releaseHandler();
+    }
+
+    const processed = await processing;
+
+    assert.equal(processed, false);
+
+    const updated = await prisma.outbox_events.findUniqueOrThrow({
+        where: { id: event.id }
+    });
+
+    assert.equal(updated.status, "processing");
+    assert.equal(updated.attempts, 1);
+    assert.equal(updated.processed_at, null);
+});
+
 test("Consumer schedules a retry when event handling fails", async () => {
     const event = await prisma.outbox_events.create({
         data: {
