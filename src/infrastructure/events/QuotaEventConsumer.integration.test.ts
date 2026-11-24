@@ -3,6 +3,7 @@ import "dotenv/config";
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { prisma } from "../database/prisma.js";
 import { QuotaEventConsumer } from "./QuotaEventConsumer.js";
 
@@ -450,4 +451,136 @@ test("Consumer never persists sensitive exception details", async () => {
     assert.equal(updated.last_error, "Event handler failed");
     assert.ok(!updated.last_error?.includes(fakeCredential));
     assert.equal(updated.processed_at, null);
+});
+
+
+test("Consumer recovers after a real worker process crash", {
+    timeout: 15000
+}, async () => {
+    const event = await prisma.outbox_events.create({
+        data: {
+            event_type: "quota.threshold.reached",
+            deduplication_key: `test:process-crash:${randomUUID()}`,
+            payload: {
+                test: true,
+                scenario: "real-process-crash"
+            }
+        }
+    });
+
+    const child = spawn(
+        process.execPath,
+        [
+            "--import",
+            "tsx",
+            "src/infrastructure/events/crash-test-worker.ts"
+        ],
+        {
+            cwd: process.cwd(),
+            env: {
+                ...process.env,
+                DB_NAME: "usage_metering_test",
+                CRASH_TEST_EVENT_ID: String(event.id)
+            },
+            stdio: ["ignore", "pipe", "pipe"]
+        }
+    );
+
+    let output = "";
+
+    const exited = new Promise<{
+        code: number | null;
+        signal: NodeJS.Signals | null;
+    }>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("exit", (code, signal) => {
+            resolve({ code, signal });
+        });
+    });
+
+    try {
+        await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                cleanup();
+                reject(new Error(
+                    "Timed out waiting for crash-test handler"
+                ));
+            }, 10000);
+
+            const onData = (chunk: Buffer) => {
+                output += chunk.toString();
+
+                if (output.includes("HANDLER_STARTED")) {
+                    cleanup();
+                    resolve();
+                }
+            };
+
+            const onExit = () => {
+                cleanup();
+                reject(new Error(
+                    "Crash-test worker exited before handler started"
+                ));
+            };
+
+            const cleanup = () => {
+                clearTimeout(timeout);
+                child.stdout?.off("data", onData);
+                child.off("exit", onExit);
+            };
+
+            child.stdout?.on("data", onData);
+            child.once("exit", onExit);
+        });
+
+        const claimed = await prisma.outbox_events.findUniqueOrThrow({
+            where: { id: event.id }
+        });
+
+        assert.equal(claimed.status, "processing");
+        assert.equal(claimed.attempts, 1);
+
+        child.kill("SIGKILL");
+
+        const result = await exited;
+
+        assert.equal(result.signal, "SIGKILL");
+
+        const stranded = await prisma.outbox_events.findUniqueOrThrow({
+            where: { id: event.id }
+        });
+
+        assert.equal(stranded.status, "processing");
+        assert.equal(stranded.attempts, 1);
+        assert.equal(stranded.processed_at, null);
+
+        await prisma.outbox_events.update({
+            where: { id: event.id },
+            data: {
+                available_at: new Date("2020-01-01T00:00:00.000Z")
+            }
+        });
+
+        const replacement = new QuotaEventConsumer(
+            prisma,
+            async () => {}
+        );
+
+        assert.equal(await replacement.processOne(event.id), true);
+
+        const recovered = await prisma.outbox_events.findUniqueOrThrow({
+            where: { id: event.id }
+        });
+
+        assert.equal(recovered.status, "completed");
+        assert.equal(recovered.attempts, 2);
+        assert.ok(recovered.processed_at);
+        assert.equal(recovered.last_error, null);
+    } finally {
+        if (child.exitCode === null && child.signalCode === null) {
+            child.kill("SIGKILL");
+        }
+
+        await exited.catch(() => {});
+    }
 });
