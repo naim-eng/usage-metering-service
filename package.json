@@ -6,7 +6,7 @@
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:unit && npm run test:integration",
-    "test:unit": "tsx --test src/test-quota.ts src/security-middleware.test.ts src/proxy-config.test.ts",
+    "test:unit": "tsx --test src/test-quota.ts src/security-middleware.test.ts src/proxy-config.test.ts src/readiness.test.ts src/shutdown.test.ts",
     "test:integration": "bash scripts/run-integration-tests.sh",
     "consumer": "tsx src/infrastructure/events/run-consumer.ts"
   },

@@ -33,6 +33,8 @@ import { authenticateAccount } from "./auth.js";
 import express from "express";
 import helmet from "helmet";
 import { configureTrustedProxy } from "./proxy-config.js";
+import { createReadinessHandler } from "./readiness.js";
+import { registerGracefulShutdown, registerShutdownSignals } from "./shutdown.js";
 import {
     managementLimiter,
     consumptionPreAuthLimiter,
@@ -56,7 +58,7 @@ app.use(express.json());
 
 // Apply separate limits to metering and management traffic.
 app.use((req, res, next) => {
-    if (req.path === "/health") {
+    if (req.path === "/health" || req.path === "/ready") {
         next();
         return;
     }
@@ -75,6 +77,8 @@ app.use("/projects", projectsRouter);
 app.get("/health", (req, res) => {
     res.json({ status: "ok" });
 });
+
+app.get("/ready", createReadinessHandler(prisma));
 
 // Retrieve predefined plans using Prisma.
 app.get("/plans", async (_req, res) => {
@@ -363,7 +367,10 @@ app.patch("/users/plan", authenticateAccount, async (req, res) => {
     }
 });
 
-// Start the HTTP server.
-app.listen(PORT, () => {
+// Start the HTTP server and register graceful shutdown.
+const server = app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
 });
+
+const shutdown = registerGracefulShutdown(server, prisma);
+registerShutdownSignals(shutdown);
