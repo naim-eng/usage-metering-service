@@ -32,6 +32,7 @@ import { prisma } from "./infrastructure/database/prisma.js";
 import { authenticateAccount } from "./auth.js";
 import express from "express";
 import helmet from "helmet";
+import { configureTrustedProxy } from "./proxy-config.js";
 import {
     managementLimiter,
     consumptionPreAuthLimiter,
@@ -39,6 +40,7 @@ import {
 } from "./rate-limit.js";
 
 const app = express();
+configureTrustedProxy(app);
 
 const consumeCreditsService = new ConsumeCreditsService(prisma);
 const createAccountService = new CreateAccountService(prisma);
