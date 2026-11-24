@@ -59,7 +59,8 @@ services:
 
   consumer:
     build: .
-    command: ["npm", "run", "consumer"]
+    command: ["node", "--import", "tsx", "src/infrastructure/events/run-consumer.ts"]
+    stop_grace_period: 75s
     restart: unless-stopped
     environment:
       DB_HOST: db

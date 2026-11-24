@@ -1,40 +1,49 @@
 import { logger } from "../logging/logger.js";
-import { setTimeout as sleep } from "node:timers/promises";
 import { prisma } from "../database/prisma.js";
 import { QuotaEventConsumer } from "./QuotaEventConsumer.js";
+import { ConsumerWorker } from "./consumer-worker.js";
 
-const POLL_INTERVAL_MS = 2000;
-
-let stopping = false;
+const consumer = new QuotaEventConsumer(prisma);
+const worker = new ConsumerWorker(consumer);
 
 process.on("SIGINT", () => {
-    stopping = true;
+    logger.info(
+        { event: "consumer_shutdown_requested", signal: "SIGINT" },
+        "Consumer shutdown requested"
+    );
+    worker.stop();
 });
 
 process.on("SIGTERM", () => {
-    stopping = true;
+    logger.info(
+        { event: "consumer_shutdown_requested", signal: "SIGTERM" },
+        "Consumer shutdown requested"
+    );
+    worker.stop();
 });
 
-const consumer = new QuotaEventConsumer(prisma);
-
 async function main(): Promise<void> {
-    logger.info({ event: "consumer_worker_started" }, "Event consumer worker started");
+    logger.info(
+        { event: "consumer_worker_started" },
+        "Event consumer worker started"
+    );
 
     try {
-        while (!stopping) {
-            const processed = await consumer.processOne();
-
-            if (!processed) {
-                await sleep(POLL_INTERVAL_MS);
-            }
-        }
+        await worker.run();
     } finally {
         await prisma.$disconnect();
-        logger.info({ event: "consumer_worker_stopped" }, "Event consumer worker stopped");
+
+        logger.info(
+            { event: "consumer_worker_stopped" },
+            "Event consumer worker stopped"
+        );
     }
 }
 
 main().catch(() => {
-    logger.fatal({ event: "consumer_worker_failed" }, "Event consumer worker failed");
+    logger.fatal(
+        { event: "consumer_worker_failed" },
+        "Event consumer worker failed"
+    );
     process.exitCode = 1;
 });
