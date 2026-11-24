@@ -48,6 +48,33 @@ async function main(): Promise<void> {
                 return prisma.outbox_events.count({
                     where: { status: "failed" }
                 });
+            },
+
+            async getPendingBacklog() {
+                const rows = await prisma.$queryRaw<
+                    {
+                        ready_count: bigint;
+                        oldest_age_seconds: number | null;
+                    }[]
+                >`
+                    SELECT
+                        COUNT(*) FILTER (
+                            WHERE available_at <= NOW()
+                        ) AS ready_count,
+                        EXTRACT(
+                            EPOCH FROM (
+                                NOW() - MIN(created_at)
+                            )
+                        )::double precision AS oldest_age_seconds
+                    FROM outbox_events
+                    WHERE status = 'pending'
+                `;
+
+                return {
+                    readyCount: rows[0]?.ready_count ?? 0n,
+                    oldestAgeSeconds:
+                        rows[0]?.oldest_age_seconds ?? null
+                };
             }
         };
 
@@ -70,6 +97,14 @@ async function main(): Promise<void> {
         console.log(
             "Permanently failed events:",
             result.failedEvents
+        );
+        console.log(
+            "Ready pending events:",
+            result.readyPendingEvents.toString()
+        );
+        console.log(
+            "Oldest pending event age (seconds):",
+            result.oldestPendingAgeSeconds ?? "none"
         );
     } finally {
         await prisma.$disconnect();

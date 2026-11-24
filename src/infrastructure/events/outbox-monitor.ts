@@ -5,6 +5,10 @@ export interface OutboxMonitorDatabase {
     >;
     countExpiredLeases(now: Date): Promise<number>;
     countFailedEvents(): Promise<number>;
+    getPendingBacklog(): Promise<{
+        readyCount: bigint;
+        oldestAgeSeconds: number | null;
+    }>;
 }
 
 export interface OutboxMonitorResult {
@@ -12,6 +16,8 @@ export interface OutboxMonitorResult {
     statusCounts: { status: string; count: bigint }[];
     expiredLeases: number;
     failedEvents: number;
+    readyPendingEvents: bigint;
+    oldestPendingAgeSeconds: number | null;
 }
 
 export async function monitorOutbox(
@@ -33,11 +39,14 @@ export async function monitorOutbox(
         new Date()
     );
     const failedEvents = await database.countFailedEvents();
+    const backlog = await database.getPendingBacklog();
 
     return {
         database: actualDatabase,
         statusCounts,
         expiredLeases,
-        failedEvents
+        failedEvents,
+        readyPendingEvents: backlog.readyCount,
+        oldestPendingAgeSeconds: backlog.oldestAgeSeconds
     };
 }

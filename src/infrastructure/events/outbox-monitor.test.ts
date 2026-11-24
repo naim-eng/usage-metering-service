@@ -29,6 +29,13 @@ function fakeDatabase() {
         async countFailedEvents() {
             calls.push("failed");
             return 2;
+        },
+        async getPendingBacklog() {
+            calls.push("backlog");
+            return {
+                readyCount: 4n,
+                oldestAgeSeconds: 120
+            };
         }
     };
 
@@ -73,14 +80,17 @@ test("monitor returns accurate read-only counts", async () => {
             { status: "pending", count: 5n }
         ],
         expiredLeases: 3,
-        failedEvents: 2
+        failedEvents: 2,
+        readyPendingEvents: 4n,
+        oldestPendingAgeSeconds: 120
     });
 
     assert.deepEqual(calls, [
         "identity",
         "statuses",
         "expired",
-        "failed"
+        "failed",
+        "backlog"
     ]);
 });
 
@@ -98,4 +108,21 @@ test("monitor propagates database query failures", async () => {
     );
 
     assert.deepEqual(calls, ["identity", "statuses"]);
+});
+
+test("monitor handles an empty pending backlog", async () => {
+    const { database } = fakeDatabase();
+
+    database.getPendingBacklog = async () => ({
+        readyCount: 0n,
+        oldestAgeSeconds: null
+    });
+
+    const result = await monitorOutbox(
+        database,
+        "usage_metering_test"
+    );
+
+    assert.equal(result.readyPendingEvents, 0n);
+    assert.equal(result.oldestPendingAgeSeconds, null);
 });
