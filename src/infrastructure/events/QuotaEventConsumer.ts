@@ -115,11 +115,12 @@ export class QuotaEventConsumer {
             const retryDelaySeconds =
                 Math.min(5 * 2 ** (event.attempts - 1), 300);
 
-            await this.prisma.outbox_events.updateMany({
+            const result = await this.prisma.outbox_events.updateMany({
                 where: {
                     id: event.id,
                     status: "processing",
-                    attempts: event.attempts
+                    attempts: event.attempts,
+                    available_at: { gt: new Date() }
                 },
                 data: {
                     status: exhausted ? "failed" : "pending",
@@ -129,6 +130,14 @@ export class QuotaEventConsumer {
                     last_error: message
                 }
             });
+
+            if (result.count !== 1) {
+                logger.warn(
+                    { event: "consumer_lease_lost" },
+                    "Event processing lease lost"
+                );
+                return false;
+            }
 
             logger.error(
                 {
