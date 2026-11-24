@@ -27,7 +27,7 @@ export class QuotaEventConsumer {
         // Mark events whose final processing attempt expired.
         // Only expired leases are eligible, so active workers
         // completing their final attempt are not interrupted.
-        await this.prisma.outbox_events.updateMany({
+        const exhaustedLeases = await this.prisma.outbox_events.updateMany({
             where: {
                 status: "processing",
                 attempts: { gte: MAX_ATTEMPTS },
@@ -38,6 +38,16 @@ export class QuotaEventConsumer {
                 last_error: "Processing lease expired after maximum attempts"
             }
         });
+
+        if (exhaustedLeases.count > 0) {
+            this.log.warn(
+                {
+                    event: "consumer_exhausted_leases",
+                    count: exhaustedLeases.count
+                },
+                "Expired processing leases marked as failed"
+            );
+        }
 
         const events = await this.prisma.$transaction(async (tx) => {
             return tx.$queryRaw<ClaimedEvent[]>`

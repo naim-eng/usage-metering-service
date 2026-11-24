@@ -96,7 +96,20 @@ test("Consumer marks exhausted events as failed", async () => {
         }
     });
 
-    const consumer = new QuotaEventConsumer(prisma);
+    const stream = new PassThrough();
+    let output = "";
+
+    stream.on("data", chunk => {
+        output += chunk.toString();
+    });
+
+    const testLogger = createLogger("info", stream);
+    const consumer = new QuotaEventConsumer(
+        prisma,
+        async () => {},
+        testLogger
+    );
+
     const processed = await consumer.processOne(event.id);
 
     assert.equal(processed, false);
@@ -111,6 +124,34 @@ test("Consumer marks exhausted events as failed", async () => {
         updated.last_error,
         "Processing lease expired after maximum attempts"
     );
+
+    const entries = output.trim()
+        .split("\n")
+        .map(line => JSON.parse(line));
+
+    const warnings = entries.filter(
+        entry => entry.event === "consumer_exhausted_leases"
+    );
+
+    assert.equal(warnings.length, 1);
+    assert.ok(Number.isSafeInteger(warnings[0].count));
+    assert.ok(warnings[0].count >= 1);
+
+    output = "";
+
+    const processedAgain = await consumer.processOne(event.id);
+
+    assert.equal(processedAgain, false);
+
+    const secondEntries = output.trim()
+        ? output.trim().split("\n").map(line => JSON.parse(line))
+        : [];
+
+    const secondWarnings = secondEntries.filter(
+        entry => entry.event === "consumer_exhausted_leases"
+    );
+
+    assert.equal(secondWarnings.length, 0);
 });
 
 test("Concurrent consumers cannot claim the same event twice", async () => {
