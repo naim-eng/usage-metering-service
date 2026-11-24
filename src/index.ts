@@ -1,3 +1,4 @@
+import { loadApiConfig } from "./api-config.js";
 import { errorHandler } from "./infrastructure/logging/error-handler.js";
 import { projectsRouter } from "./projects.js";
 
@@ -55,7 +56,7 @@ const changeAccountPlanService = new ChangeAccountPlanService(prisma);
 const changeUserPlanService = new ChangeUserPlanService(prisma);
 const listPlansService = new ListPlansService(prisma);
 
-const PORT = Number(process.env.PORT ?? 3000);
+const { port: PORT } = loadApiConfig();
 
 app.use(helmet());
 app.use(express.json());
