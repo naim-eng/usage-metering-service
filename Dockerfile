@@ -25,6 +25,9 @@ COPY examples ./examples
 COPY sql ./sql
 COPY scripts/migrations ./scripts/migrations
 
+# Run the application without root privileges.
+USER node
+
 EXPOSE 3000
 
 CMD ["npm", "start"]

@@ -31,6 +31,12 @@ import { ListPlansService } from "./application/services/ListPlansService.js";
 import { prisma } from "./infrastructure/database/prisma.js";
 import { authenticateAccount } from "./auth.js";
 import express from "express";
+import helmet from "helmet";
+import {
+    managementLimiter,
+    consumptionPreAuthLimiter,
+    consumptionLimiter
+} from "./rate-limit.js";
 
 const app = express();
 
@@ -43,7 +49,23 @@ const listPlansService = new ListPlansService(prisma);
 
 const PORT = Number(process.env.PORT ?? 3000);
 
+app.use(helmet());
 app.use(express.json());
+
+// Apply separate limits to metering and management traffic.
+app.use((req, res, next) => {
+    if (req.path === "/health") {
+        next();
+        return;
+    }
+
+    if (req.path === "/consume") {
+        next();
+        return;
+    }
+
+    managementLimiter(req, res, next);
+});
 
 app.use("/projects", projectsRouter);
 
@@ -171,58 +193,64 @@ app.post("/users", authenticateAccount, async (req, res) => {
 });
 
 // Consume credits.
-app.post("/consume", authenticateAccount, async (req, res) => {
-    const accountId = String(res.locals.account.id);
-    const { userId, units, requestId } = req.body ?? {};
-
-    if (
-        typeof userId !== "string" ||
-        !userId.trim() ||
-        userId.length > 100 ||
-        !Number.isSafeInteger(units) ||
-        units <= 0 ||
-        typeof requestId !== "string" ||
-        !requestId.trim() ||
-        requestId.length > 100
-    ) {
-        res.status(400).json({
-            error: "Invalid userId, units or requestId"
-        });
-        return;
-    }
-
-    try {
-        const result = await consumeCreditsService.execute({
-            accountId: BigInt(accountId),
-            externalUserId: userId,
-            units: BigInt(units),
-            requestId
-        });
-
-        res.status(200).json(result);
-    } catch (error) {
-        const message =
-            error instanceof Error ? error.message : "";
-
-        if (message === "User not found in account") {
-            res.status(404).json({ error: message });
-            return;
-        }
+app.post(
+    "/consume",
+    consumptionPreAuthLimiter,
+    authenticateAccount,
+    consumptionLimiter,
+    async (req, res) => {
+        const accountId = String(res.locals.account.id);
+        const { userId, units, requestId } = req.body ?? {};
 
         if (
-            message ===
-            "Request ID already used with different parameters"
+            typeof userId !== "string" ||
+            !userId.trim() ||
+            userId.length > 100 ||
+            !Number.isSafeInteger(units) ||
+            units <= 0 ||
+            typeof requestId !== "string" ||
+            !requestId.trim() ||
+            requestId.length > 100
         ) {
-            res.status(409).json({ error: message });
+            res.status(400).json({
+                error: "Invalid userId, units or requestId"
+            });
             return;
         }
 
-        console.error("Consumption failed:", error);
-        res.status(500).json({
-            error: "Failed to process consumption"
-        });
+        try {
+            const result = await consumeCreditsService.execute({
+                accountId: BigInt(accountId),
+                externalUserId: userId,
+                units: BigInt(units),
+                requestId
+            });
+
+            res.status(200).json(result);
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "";
+
+            if (message === "User not found in account") {
+                res.status(404).json({ error: message });
+                return;
+            }
+
+            if (
+                message ===
+                "Request ID already used with different parameters"
+            ) {
+                res.status(409).json({ error: message });
+                return;
+            }
+
+            console.error("Consumption failed:", error);
+            res.status(500).json({
+                error: "Failed to process consumption"
+            });
+        }
     }
-});
+);
 
 // Plan-management and reporting routers.
 app.use("/plans", plansRouter);
