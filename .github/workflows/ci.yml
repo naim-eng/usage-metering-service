@@ -49,6 +49,32 @@ jobs:
       - name: Start PostgreSQL
         run: docker compose up -d --wait db
 
+      - name: Initialize test database
+        run: bash scripts/setup-test-db.sh
+
+      - name: Verify migration history
+        run: |
+          count=$(docker compose exec -T db \
+            psql -U "$DB_USER" -d "$DB_NAME" -Atqc \
+            "SELECT COUNT(*) FROM schema_migrations;")
+          if [ "$count" != "9" ]; then
+            echo "Expected 9 migration records, found: $count"
+            exit 1
+          fi
+          echo "Verified all 9 migration records."
+
+      - name: Verify migration idempotency
+        run: |
+          npx tsx scripts/migrations/run.ts
+          count=$(docker compose exec -T db \
+            psql -U "$DB_USER" -d "$DB_NAME" -Atqc \
+            "SELECT COUNT(*) FROM schema_migrations;")
+          if [ "$count" != "9" ]; then
+            echo "Migration history changed unexpectedly: $count"
+            exit 1
+          fi
+          echo "Migration rerun completed successfully."
+
       - name: Run automated tests
         run: npm test
 

@@ -21,6 +21,10 @@ COPY tsconfig.json ./
 COPY src ./src
 COPY examples ./examples
 
+# Required by the tracked database migration runner.
+COPY sql ./sql
+COPY scripts/migrations ./scripts/migrations
+
 EXPOSE 3000
 
 CMD ["npm", "start"]
