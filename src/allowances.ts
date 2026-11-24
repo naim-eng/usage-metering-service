@@ -1,3 +1,4 @@
+import { logger } from "./infrastructure/logging/logger.js";
 
 import { Router } from "express";
 import { authenticateAccount } from "./auth.js";
@@ -30,7 +31,7 @@ allowancesRouter.get(
                 return;
             }
 
-            console.error("Account allowance lookup failed:", error);
+            logger.error({ event: "api_operation_failed", operation: "get_account_allowance" }, "API operation failed");
 
             res.status(500).json({
                 error: "Failed to retrieve account allowance"
@@ -51,7 +52,7 @@ allowancesRouter.get(
 
             res.status(200).json(result);
         } catch (error) {
-            console.error("User allowance lookup failed:", error);
+            logger.error({ event: "api_operation_failed", operation: "get_user_allowances" }, "API operation failed");
 
             res.status(500).json({
                 error: "Failed to retrieve user allowances"

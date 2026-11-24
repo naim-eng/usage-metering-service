@@ -1,3 +1,4 @@
+import { logger } from "./infrastructure/logging/logger.js";
 
 import { Router } from "express";
 import { Prisma } from "./generated/prisma/client.js";
@@ -88,7 +89,7 @@ projectsRouter.get("/", async (req, res) => {
             }))
         });
     } catch (error) {
-        console.error("Project listing failed:", error);
+        logger.error({ event: "api_operation_failed", operation: "list_projects" }, "API operation failed");
         res.status(500).json({ error: "Failed to retrieve projects" });
     }
 });
@@ -234,7 +235,7 @@ projectsRouter.get("/:projectId/dashboard", async (req, res) => {
             notifications
         });
     } catch (error) {
-        console.error("Project dashboard retrieval failed:", error);
+        logger.error({ event: "api_operation_failed", operation: "get_project_dashboard" }, "API operation failed");
 
         res.status(500).json({
             error: "Failed to retrieve project dashboard"
@@ -294,7 +295,7 @@ projectsRouter.post("/", async (req, res) => {
             }
         }
 
-        console.error("Project creation failed:", error);
+        logger.error({ event: "api_operation_failed", operation: "create_project" }, "API operation failed");
         res.status(500).json({ error: "Failed to create project" });
     }
 });
@@ -338,7 +339,7 @@ projectsRouter.post("/:projectId/api-keys", async (req, res) => {
             return;
         }
 
-        console.error("Project API key creation failed:", error);
+        logger.error({ event: "api_operation_failed", operation: "create_project_api_key" }, "API operation failed");
         res.status(500).json({ error: "Failed to create API key" });
     }
 });
@@ -377,7 +378,7 @@ projectsRouter.get("/:projectId/api-keys", async (req, res) => {
             return;
         }
 
-        console.error("Project API key listing failed:", error);
+        logger.error({ event: "api_operation_failed", operation: "list_project_api_keys" }, "API operation failed");
         res.status(500).json({ error: "Failed to list API keys" });
     }
 });
@@ -422,7 +423,7 @@ projectsRouter.delete("/:projectId/api-keys/:keyId", async (req, res) => {
             return;
         }
 
-        console.error("Project API key revocation failed:", error);
+        logger.error({ event: "api_operation_failed", operation: "revoke_project_api_key" }, "API operation failed");
         res.status(500).json({ error: "Failed to revoke API key" });
     }
 });

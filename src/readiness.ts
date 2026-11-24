@@ -1,3 +1,4 @@
+import { logger } from "./infrastructure/logging/logger.js";
 import type { RequestHandler } from "express";
 
 export interface ReadinessDatabase {
@@ -16,8 +17,11 @@ export function createReadinessHandler(
             res.status(200).json({
                 status: "ready"
             });
-        } catch (error) {
-            console.error("Database readiness check failed");
+        } catch {
+            logger.error(
+                { event: "database_readiness_failed" },
+                "Database readiness check failed"
+            );
 
             res.status(503).json({
                 status: "not_ready"

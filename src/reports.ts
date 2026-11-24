@@ -1,3 +1,4 @@
+import { logger } from "./infrastructure/logging/logger.js";
 
 import { Router } from "express";
 import { authenticateAccount } from "./auth.js";
@@ -43,7 +44,7 @@ reportsRouter.get(
                 return;
             }
 
-            console.error("Monthly report failed:", error);
+            logger.error({ event: "api_operation_failed", operation: "get_monthly_report" }, "API operation failed");
 
             res.status(500).json({
                 error: "Failed to retrieve monthly report"

@@ -1,3 +1,4 @@
+import { logger } from "./infrastructure/logging/logger.js";
 import type { Server } from "node:http";
 
 export interface ShutdownDatabase {
@@ -27,7 +28,10 @@ export function registerGracefulShutdown(
         }
 
         shuttingDown = true;
-        console.log(`Received ${signal}. Shutting down API.`);
+        logger.info(
+            { event: "api_shutdown_started" },
+            "API shutdown started"
+        );
 
         let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -54,10 +58,16 @@ export function registerGracefulShutdown(
 
         try {
             await Promise.race([cleanup(), deadline]);
-            console.log("API shutdown completed.");
+            logger.info(
+                { event: "api_shutdown_completed" },
+                "API shutdown completed"
+            );
             onComplete(0);
-        } catch (error) {
-            console.error("API shutdown failed:", error);
+        } catch {
+            logger.error(
+                { event: "api_shutdown_failed" },
+                "API shutdown failed"
+            );
             onComplete(1);
         } finally {
             if (timer) {

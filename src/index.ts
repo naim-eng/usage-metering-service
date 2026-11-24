@@ -1,3 +1,4 @@
+import { errorHandler } from "./infrastructure/logging/error-handler.js";
 import { projectsRouter } from "./projects.js";
 
 import { allowancesRouter } from "./allowances.js";
@@ -33,6 +34,8 @@ import { authenticateAccount } from "./auth.js";
 import express from "express";
 import helmet from "helmet";
 import { configureTrustedProxy } from "./proxy-config.js";
+import { createRequestLogger } from "./infrastructure/logging/request-logger.js";
+import { logger } from "./infrastructure/logging/logger.js";
 import { createReadinessHandler } from "./readiness.js";
 import { registerGracefulShutdown, registerShutdownSignals } from "./shutdown.js";
 import {
@@ -43,6 +46,7 @@ import {
 
 const app = express();
 configureTrustedProxy(app);
+app.use(createRequestLogger());
 
 const consumeCreditsService = new ConsumeCreditsService(prisma);
 const createAccountService = new CreateAccountService(prisma);
@@ -87,7 +91,7 @@ app.get("/plans", async (_req, res) => {
 
         res.status(200).json(plans);
     } catch (error) {
-        console.error("Error retrieving plans:", error);
+        logger.error({ event: "api_operation_failed", operation: "list_plans" }, "API operation failed");
         res.status(500).json({
             error: "Failed to retrieve plans"
         });
@@ -136,7 +140,7 @@ app.post("/accounts", async (req, res) => {
             return;
         }
 
-        console.error("Account creation failed:", error);
+        logger.error({ event: "api_operation_failed", operation: "create_account" }, "API operation failed");
         res.status(500).json({
             error: "Failed to create account"
         });
@@ -191,7 +195,7 @@ app.post("/users", authenticateAccount, async (req, res) => {
             return;
         }
 
-        console.error("User registration failed:", error);
+        logger.error({ event: "api_operation_failed", operation: "create_user" }, "API operation failed");
         res.status(500).json({
             error: "Failed to register user"
         });
@@ -250,7 +254,7 @@ app.post(
                 return;
             }
 
-            console.error("Consumption failed:", error);
+            logger.error({ event: "api_operation_failed", operation: "consume_credits" }, "API operation failed");
             res.status(500).json({
                 error: "Failed to process consumption"
             });
@@ -302,7 +306,7 @@ app.patch("/accounts/plan", authenticateAccount, async (req, res) => {
             return;
         }
 
-        console.error("Plan assignment failed:", error);
+        logger.error({ event: "api_operation_failed", operation: "change_account_plan" }, "API operation failed");
         res.status(500).json({
             error: "Failed to update account plan"
         });
@@ -360,16 +364,24 @@ app.patch("/users/plan", authenticateAccount, async (req, res) => {
             return;
         }
 
-        console.error("User plan update failed:", error);
+        logger.error({ event: "api_operation_failed", operation: "change_user_plan" }, "API operation failed");
         res.status(500).json({
             error: "Failed to update user plan"
         });
     }
 });
 
+app.use(errorHandler);
+
 // Start the HTTP server and register graceful shutdown.
 const server = app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    logger.info(
+        {
+            event: "api_server_started",
+            port: PORT
+        },
+        "API server started"
+    );
 });
 
 const shutdown = registerGracefulShutdown(server, prisma);

@@ -171,7 +171,7 @@ test("Consumer schedules a retry when event handling fails", async () => {
 
     assert.equal(updated.status, "pending");
     assert.equal(updated.attempts, 1);
-    assert.equal(updated.last_error, "Simulated processing failure");
+    assert.equal(updated.last_error, "Event handler failed");
     assert.equal(updated.processed_at, null);
 
     // The first failed attempt should schedule a retry
@@ -214,7 +214,40 @@ test("Consumer stops retrying after the fifth processing failure", async () => {
     assert.equal(updated.attempts, 5);
     assert.equal(
         updated.last_error,
-        "Final simulated processing failure"
+        "Event handler failed"
     );
+    assert.equal(updated.processed_at, null);
+});
+
+test("Consumer never persists sensitive exception details", async () => {
+    const fakeCredential = "FAKE_TEST_CREDENTIAL_DO_NOT_LOG";
+
+    const event = await prisma.outbox_events.create({
+        data: {
+            event_type: "quota.threshold.reached",
+            deduplication_key: `test:sensitive-error:${randomUUID()}`,
+            payload: {
+                test: true,
+                scenario: "sensitive-exception"
+            }
+        }
+    });
+
+    const consumer = new QuotaEventConsumer(prisma, async () => {
+        throw new Error(`Database operation failed: ${fakeCredential}`);
+    });
+
+    const processed = await consumer.processOne(event.id);
+
+    assert.equal(processed, false);
+
+    const updated = await prisma.outbox_events.findUniqueOrThrow({
+        where: { id: event.id }
+    });
+
+    assert.equal(updated.status, "pending");
+    assert.equal(updated.attempts, 1);
+    assert.equal(updated.last_error, "Event handler failed");
+    assert.ok(!updated.last_error?.includes(fakeCredential));
     assert.equal(updated.processed_at, null);
 });

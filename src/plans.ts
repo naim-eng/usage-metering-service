@@ -1,3 +1,4 @@
+import { logger } from "./infrastructure/logging/logger.js";
 
 import { Router } from "express";
 import { authenticateAccount } from "./auth.js";
@@ -21,7 +22,7 @@ plansRouter.get("/custom", authenticateAccount, async (_req, res) => {
 
         res.status(200).json(result);
     } catch (error) {
-        console.error("Custom plan listing failed:", error);
+        logger.error({ event: "api_operation_failed", operation: "list_custom_plans" }, "API operation failed");
         res.status(500).json({
             error: "Failed to retrieve custom plans"
         });
@@ -60,7 +61,7 @@ plansRouter.post("/", authenticateAccount, async (req, res) => {
 
         res.status(201).json(result);
     } catch (error) {
-        console.error("Plan creation failed:", error);
+        logger.error({ event: "api_operation_failed", operation: "create_custom_plan" }, "API operation failed");
         res.status(500).json({
             error: "Failed to create plan"
         });
@@ -137,7 +138,7 @@ plansRouter.patch("/:planId", authenticateAccount, async (req, res) => {
             return;
         }
 
-        console.error("Plan update failed:", error);
+        logger.error({ event: "api_operation_failed", operation: "update_custom_plan" }, "API operation failed");
         res.status(500).json({
             error: "Failed to update custom plan"
         });

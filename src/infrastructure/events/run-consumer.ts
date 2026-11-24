@@ -1,3 +1,4 @@
+import { logger } from "../logging/logger.js";
 import { setTimeout as sleep } from "node:timers/promises";
 import { prisma } from "../database/prisma.js";
 import { QuotaEventConsumer } from "./QuotaEventConsumer.js";
@@ -17,7 +18,7 @@ process.on("SIGTERM", () => {
 const consumer = new QuotaEventConsumer(prisma);
 
 async function main(): Promise<void> {
-    console.log("[Event Consumer] Worker started");
+    logger.info({ event: "consumer_worker_started" }, "Event consumer worker started");
 
     try {
         while (!stopping) {
@@ -29,11 +30,11 @@ async function main(): Promise<void> {
         }
     } finally {
         await prisma.$disconnect();
-        console.log("[Event Consumer] Worker stopped");
+        logger.info({ event: "consumer_worker_stopped" }, "Event consumer worker stopped");
     }
 }
 
-main().catch((error) => {
-    console.error("[Event Consumer] Worker failed:", error);
+main().catch(() => {
+    logger.fatal({ event: "consumer_worker_failed" }, "Event consumer worker failed");
     process.exitCode = 1;
 });

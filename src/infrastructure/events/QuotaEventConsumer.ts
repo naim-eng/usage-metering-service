@@ -1,4 +1,5 @@
 import type { PrismaClient } from "../../generated/prisma/client.js";
+import { logger } from "../logging/logger.js";
 
 interface ClaimedEvent {
     id: bigint;
@@ -16,9 +17,9 @@ export class QuotaEventConsumer {
         private readonly handleEvent: (
             event: ClaimedEvent
         ) => Promise<void> = async (event) => {
-            console.log(
-                `[Event Consumer] Processing ${event.event_type}`,
-                event.payload
+            logger.info(
+                { event: "consumer_event_processing" },
+                "Processing quota event"
             );
         }
     ) {}
@@ -96,16 +97,18 @@ export class QuotaEventConsumer {
             });
 
             if (result.count !== 1) {
-                console.warn(
-                    `[Event Consumer] Event ${event.id} lost its processing lease`
+                logger.warn(
+                    { event: "consumer_lease_lost" },
+                    "Event processing lease lost"
                 );
                 return false;
             }
 
             return true;
-        } catch (error) {
-            const message =
-                error instanceof Error ? error.message : String(error);
+        } catch {
+            // Never persist raw exception messages.
+            // They may contain credentials or sensitive event data.
+            const message = "Event handler failed";
 
             const exhausted = event.attempts >= MAX_ATTEMPTS;
 
@@ -127,8 +130,12 @@ export class QuotaEventConsumer {
                 }
             });
 
-            console.error(
-                `[Event Consumer] Failed event ${event.id}: ${message}`
+            logger.error(
+                {
+                    event: "consumer_event_failed",
+                    exhausted
+                },
+                "Event handler failed"
             );
 
             return false;

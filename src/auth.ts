@@ -2,6 +2,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { prisma } from "./infrastructure/database/prisma.js";
 import { hashApiKey } from "./api-keys.js";
+import { logger } from "./infrastructure/logging/logger.js";
 
 export async function authenticateAccount(
     req: Request,
@@ -84,7 +85,7 @@ export async function authenticateAccount(
 
         next();
     } catch (error) {
-        console.error("Authentication failed:", error);
+        logger.error({ event: "authentication_failed", operation: "authenticate_account" }, "Authentication operation failed");
 
         res.status(500).json({
             error: "Internal server error"
