@@ -4,8 +4,10 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { PassThrough } from "node:stream";
 import { prisma } from "../database/prisma.js";
 import { QuotaEventConsumer } from "./QuotaEventConsumer.js";
+import { createLogger } from "../logging/logger.js";
 
 if (process.env.DB_NAME !== "usage_metering_test") {
     throw new Error(
@@ -467,6 +469,54 @@ test("Consumer stops retrying after the fifth processing failure", async () => {
         "Event handler failed"
     );
     assert.equal(updated.processed_at, null);
+});
+
+test("Consumer failure logs include safe diagnostic metadata", async () => {
+    const stream = new PassThrough();
+    let output = "";
+
+    stream.on("data", chunk => {
+        output += chunk.toString();
+    });
+
+    const testLogger = createLogger("info", stream);
+    const secret = "TEST_CONSUMER_SECRET_DO_NOT_LOG";
+
+    const event = await prisma.outbox_events.create({
+        data: {
+            event_type: "quota.threshold.reached",
+            deduplication_key: `test:consumer-log:${randomUUID()}`,
+            payload: {
+                credential: secret
+            }
+        }
+    });
+
+    const consumer = new QuotaEventConsumer(
+        prisma,
+        async () => {
+            throw new Error(secret);
+        },
+        testLogger
+    );
+
+    const processed = await consumer.processOne(event.id);
+
+    assert.equal(processed, false);
+
+    const entries = output.trim()
+        .split("\n")
+        .map(line => JSON.parse(line));
+
+    const failure = entries.find(
+        entry => entry.event === "consumer_event_failed"
+    );
+
+    assert.ok(failure);
+    assert.equal(failure.eventId, event.id.toString());
+    assert.equal(failure.attempt, 1);
+    assert.equal(failure.exhausted, false);
+    assert.ok(!output.includes(secret));
 });
 
 test("Consumer never persists sensitive exception details", async () => {

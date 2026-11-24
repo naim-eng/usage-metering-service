@@ -1,5 +1,6 @@
 import type { PrismaClient } from "../../generated/prisma/client.js";
 import { logger } from "../logging/logger.js";
+import type { Logger } from "pino";
 
 interface ClaimedEvent {
     id: bigint;
@@ -16,12 +17,8 @@ export class QuotaEventConsumer {
         private readonly prisma: PrismaClient,
         private readonly handleEvent: (
             event: ClaimedEvent
-        ) => Promise<void> = async (event) => {
-            logger.info(
-                { event: "consumer_event_processing" },
-                "Processing quota event"
-            );
-        }
+        ) => Promise<void> = async () => {},
+        private readonly log: Logger = logger
     ) {}
 
     async processOne(eventId?: bigint): Promise<boolean> {
@@ -80,6 +77,15 @@ export class QuotaEventConsumer {
         const event = events[0];
 
         try {
+            this.log.info(
+                {
+                    event: "consumer_event_processing",
+                    eventId: event.id.toString(),
+                    attempt: event.attempts
+                },
+                "Processing quota event"
+            );
+
             await this.handleEvent(event);
 
             const result = await this.prisma.outbox_events.updateMany({
@@ -97,8 +103,12 @@ export class QuotaEventConsumer {
             });
 
             if (result.count !== 1) {
-                logger.warn(
-                    { event: "consumer_lease_lost" },
+                this.log.warn(
+                    {
+                        event: "consumer_lease_lost",
+                        eventId: event.id.toString(),
+                        attempt: event.attempts
+                    },
                     "Event processing lease lost"
                 );
                 return false;
@@ -132,16 +142,22 @@ export class QuotaEventConsumer {
             });
 
             if (result.count !== 1) {
-                logger.warn(
-                    { event: "consumer_lease_lost" },
+                this.log.warn(
+                    {
+                        event: "consumer_lease_lost",
+                        eventId: event.id.toString(),
+                        attempt: event.attempts
+                    },
                     "Event processing lease lost"
                 );
                 return false;
             }
 
-            logger.error(
+            this.log.error(
                 {
                     event: "consumer_event_failed",
+                    eventId: event.id.toString(),
+                    attempt: event.attempts,
                     exhausted
                 },
                 "Event handler failed"
