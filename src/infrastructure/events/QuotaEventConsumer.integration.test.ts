@@ -240,10 +240,23 @@ test("Consumer cannot complete an event after its lease expires", async () => {
         releaseHandler = resolve;
     });
 
-    const consumer = new QuotaEventConsumer(prisma, async () => {
-        handlerStarted();
-        await release;
+    const stream = new PassThrough();
+    let output = "";
+
+    stream.on("data", chunk => {
+        output += chunk.toString();
     });
+
+    const testLogger = createLogger("info", stream);
+
+    const consumer = new QuotaEventConsumer(
+        prisma,
+        async () => {
+            handlerStarted();
+            await release;
+        },
+        testLogger
+    );
 
     const processing = consumer.processOne(event.id);
 
@@ -278,6 +291,21 @@ test("Consumer cannot complete an event after its lease expires", async () => {
     assert.equal(updated.status, "processing");
     assert.equal(updated.attempts, 1);
     assert.equal(updated.processed_at, null);
+
+    const entries = output.trim()
+        .split("\n")
+        .map(line => JSON.parse(line));
+
+    const warnings = entries.filter(
+        entry => entry.event === "consumer_lease_lost"
+    );
+
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0].eventId, event.id.toString());
+    assert.equal(warnings[0].attempt, 1);
+    assert.equal(typeof warnings[0].durationMs, "number");
+    assert.ok(Number.isFinite(warnings[0].durationMs));
+    assert.ok(warnings[0].durationMs >= 0);
 });
 
 test("Consumer cannot schedule a retry after its lease expires", async () => {
@@ -302,11 +330,24 @@ test("Consumer cannot schedule a retry after its lease expires", async () => {
         releaseHandler = resolve;
     });
 
-    const consumer = new QuotaEventConsumer(prisma, async () => {
-        handlerStarted();
-        await release;
-        throw new Error("Simulated failure after lease expiration");
+    const stream = new PassThrough();
+    let output = "";
+
+    stream.on("data", chunk => {
+        output += chunk.toString();
     });
+
+    const testLogger = createLogger("info", stream);
+
+    const consumer = new QuotaEventConsumer(
+        prisma,
+        async () => {
+            handlerStarted();
+            await release;
+            throw new Error("Simulated failure after lease expiration");
+        },
+        testLogger
+    );
 
     const processing = consumer.processOne(event.id);
 
@@ -346,6 +387,21 @@ test("Consumer cannot schedule a retry after its lease expires", async () => {
     );
     assert.equal(updated.last_error, null);
     assert.equal(updated.processed_at, null);
+
+    const entries = output.trim()
+        .split("\n")
+        .map(line => JSON.parse(line));
+
+    const warnings = entries.filter(
+        entry => entry.event === "consumer_lease_lost"
+    );
+
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0].eventId, event.id.toString());
+    assert.equal(warnings[0].attempt, 1);
+    assert.equal(typeof warnings[0].durationMs, "number");
+    assert.ok(Number.isFinite(warnings[0].durationMs));
+    assert.ok(warnings[0].durationMs >= 0);
 });
 
 test("Consumer schedules a retry when event handling fails", async () => {

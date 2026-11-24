@@ -108,7 +108,10 @@ export class QuotaEventConsumer {
                     {
                         event: "consumer_lease_lost",
                         eventId: event.id.toString(),
-                        attempt: event.attempts
+                        attempt: event.attempts,
+                        durationMs: Math.round(
+                            performance.now() - processingStartedAt
+                        )
                     },
                     "Event processing lease lost"
                 );
@@ -159,7 +162,10 @@ export class QuotaEventConsumer {
                     {
                         event: "consumer_lease_lost",
                         eventId: event.id.toString(),
-                        attempt: event.attempts
+                        attempt: event.attempts,
+                        durationMs: Math.round(
+                            performance.now() - processingStartedAt
+                        )
                     },
                     "Event processing lease lost"
                 );
