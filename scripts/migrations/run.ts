@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { Client } from "pg";
+import { buildPgClientConfig } from "../../src/infrastructure/database/pg-config.js";
 
 const migrationsDirectory = resolve(process.cwd(), "sql");
 
@@ -104,13 +105,7 @@ function normalizeTransactionWrappers(
 async function main(): Promise<void> {
   const migrations = loadMigrations();
 
-  const client = new Client({
-    host: process.env.DB_HOST,
-    port: Number(process.env.DB_PORT),
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-  });
+  const client = new Client(buildPgClientConfig());
 
   await client.connect();
 

@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { Client } from "pg";
+import { buildPgClientConfig } from "../../src/infrastructure/database/pg-config.js";
 
 const targetDatabase = process.env.DB_NAME;
 const referenceDatabase = process.env.BASELINE_REFERENCE_DB;
@@ -25,10 +26,7 @@ type Snapshot = {
 
 function connection(database: string): Client {
   return new Client({
-    host: process.env.DB_HOST,
-    port: Number(process.env.DB_PORT),
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
+    ...buildPgClientConfig(),
     database,
   });
 }
