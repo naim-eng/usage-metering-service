@@ -75,6 +75,7 @@ export class QuotaEventConsumer {
         }
 
         const event = events[0];
+        const processingStartedAt = performance.now();
 
         try {
             this.log.info(
@@ -113,6 +114,18 @@ export class QuotaEventConsumer {
                 );
                 return false;
             }
+
+            this.log.info(
+                {
+                    event: "consumer_event_completed",
+                    eventId: event.id.toString(),
+                    attempt: event.attempts,
+                    durationMs: Math.round(
+                        performance.now() - processingStartedAt
+                    )
+                },
+                "Quota event processing completed"
+            );
 
             return true;
         } catch {

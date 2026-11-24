@@ -683,3 +683,60 @@ test("Consumer recovers after a real worker process crash", {
         await exited.catch(() => {});
     }
 });
+
+test("Consumer completion logs include safe processing duration", async () => {
+    const stream = new PassThrough();
+    let output = "";
+
+    stream.on("data", chunk => {
+        output += chunk.toString();
+    });
+
+    const testLogger = createLogger("info", stream);
+    const secret = "TEST_COMPLETION_SECRET_DO_NOT_LOG";
+
+    const event = await prisma.outbox_events.create({
+        data: {
+            event_type: "quota.threshold.reached",
+            deduplication_key: `test:completion-log:${randomUUID()}`,
+            payload: {
+                credential: secret
+            }
+        }
+    });
+
+    const consumer = new QuotaEventConsumer(
+        prisma,
+        async () => {},
+        testLogger
+    );
+
+    const processed = await consumer.processOne(event.id);
+
+    assert.equal(processed, true);
+
+    const updated = await prisma.outbox_events.findUniqueOrThrow({
+        where: { id: event.id }
+    });
+
+    assert.equal(updated.status, "completed");
+
+    const entries = output.trim()
+        .split("\n")
+        .map(line => JSON.parse(line));
+
+    const completions = entries.filter(
+        entry => entry.event === "consumer_event_completed"
+    );
+
+    assert.equal(completions.length, 1);
+
+    const completion = completions[0];
+
+    assert.equal(completion.eventId, event.id.toString());
+    assert.equal(completion.attempt, 1);
+    assert.equal(typeof completion.durationMs, "number");
+    assert.ok(Number.isFinite(completion.durationMs));
+    assert.ok(completion.durationMs >= 0);
+    assert.ok(!output.includes(secret));
+});
