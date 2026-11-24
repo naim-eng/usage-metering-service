@@ -516,6 +516,9 @@ test("Consumer failure logs include safe diagnostic metadata", async () => {
     assert.equal(failure.eventId, event.id.toString());
     assert.equal(failure.attempt, 1);
     assert.equal(failure.exhausted, false);
+    assert.equal(typeof failure.durationMs, "number");
+    assert.ok(Number.isFinite(failure.durationMs));
+    assert.ok(failure.durationMs >= 0);
     assert.ok(!output.includes(secret));
 });
 

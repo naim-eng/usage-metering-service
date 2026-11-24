@@ -171,7 +171,10 @@ export class QuotaEventConsumer {
                     event: "consumer_event_failed",
                     eventId: event.id.toString(),
                     attempt: event.attempts,
-                    exhausted
+                    exhausted,
+                    durationMs: Math.round(
+                        performance.now() - processingStartedAt
+                    )
                 },
                 "Event handler failed"
             );
