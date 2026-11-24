@@ -385,6 +385,55 @@ test("Consumer schedules a retry when event handling fails", async () => {
     );
 });
 
+test("Consumer applies exponential backoff on intermediate failures", async () => {
+    for (const [attempt, expectedDelaySeconds] of [
+        [2, 10],
+        [3, 20],
+        [4, 40]
+    ]) {
+        const event = await prisma.outbox_events.create({
+            data: {
+                event_type: "quota.threshold.reached",
+                deduplication_key: `test:retry-backoff:${randomUUID()}`,
+                payload: {
+                    test: true,
+                    scenario: "intermediate-retry-backoff"
+                },
+                status: "pending",
+                attempts: attempt - 1
+            }
+        });
+
+        const consumer = new QuotaEventConsumer(prisma, async () => {
+            throw new Error("Simulated retry failure");
+        });
+
+        const before = Date.now();
+        const processed = await consumer.processOne(event.id);
+        const after = Date.now();
+
+        assert.equal(processed, false);
+
+        const updated = await prisma.outbox_events.findUniqueOrThrow({
+            where: { id: event.id }
+        });
+
+        assert.equal(updated.status, "pending");
+        assert.equal(updated.attempts, attempt);
+        assert.equal(updated.last_error, "Event handler failed");
+        assert.equal(updated.processed_at, null);
+
+        const scheduledAt = updated.available_at.getTime();
+        const expectedDelayMs = expectedDelaySeconds * 1000;
+
+        assert.ok(
+            scheduledAt >= before + expectedDelayMs - 2000 &&
+            scheduledAt <= after + expectedDelayMs + 2000,
+            `Unexpected retry delay for attempt ${attempt}`
+        );
+    }
+});
+
 test("Consumer stops retrying after the fifth processing failure", async () => {
     const event = await prisma.outbox_events.create({
         data: {
