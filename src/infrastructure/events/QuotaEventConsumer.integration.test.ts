@@ -145,6 +145,76 @@ test("Concurrent consumers cannot claim the same event twice", async () => {
     assert.ok(updated.processed_at);
 });
 
+test("Consumer cannot overwrite an event completed by a newer worker", async () => {
+    const event = await prisma.outbox_events.create({
+        data: {
+            event_type: "quota.threshold.reached",
+            deduplication_key: `test:lease-reclaimed:${randomUUID()}`,
+            payload: {
+                test: true,
+                scenario: "concurrent-lease-reclamation"
+            }
+        }
+    });
+
+    let handlerStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+        handlerStarted = resolve;
+    });
+
+    let releaseHandler!: () => void;
+    const release = new Promise<void>((resolve) => {
+        releaseHandler = resolve;
+    });
+
+    const consumerA = new QuotaEventConsumer(prisma, async () => {
+        handlerStarted();
+        await release;
+    });
+
+    const consumerB = new QuotaEventConsumer(prisma, async () => {});
+
+    const processingA = consumerA.processOne(event.id);
+
+    await started;
+
+    let processingB: boolean;
+
+    try {
+        const claimed = await prisma.outbox_events.findUniqueOrThrow({
+            where: { id: event.id }
+        });
+
+        assert.equal(claimed.status, "processing");
+        assert.equal(claimed.attempts, 1);
+
+        await prisma.outbox_events.update({
+            where: { id: event.id },
+            data: {
+                available_at: new Date("2020-01-01T00:00:00.000Z")
+            }
+        });
+
+        processingB = await consumerB.processOne(event.id);
+    } finally {
+        releaseHandler();
+    }
+
+    const processingAResult = await processingA;
+
+    assert.equal(processingB, true);
+    assert.equal(processingAResult, false);
+
+    const updated = await prisma.outbox_events.findUniqueOrThrow({
+        where: { id: event.id }
+    });
+
+    assert.equal(updated.status, "completed");
+    assert.equal(updated.attempts, 2);
+    assert.ok(updated.processed_at);
+    assert.equal(updated.last_error, null);
+});
+
 test("Consumer cannot complete an event after its lease expires", async () => {
     const event = await prisma.outbox_events.create({
         data: {
