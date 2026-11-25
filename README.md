@@ -506,6 +506,8 @@ It has also been applied to the primary `usage_metering` database. The isolated 
 
 ## Event Producer and Consumer
 
+For operational guidance, see the [Event Consumer Operations Guide](docs/consumer-operations.md).
+
 The service uses a **transactional PostgreSQL outbox** to decouple quota-threshold event production from asynchronous processing. It does not require Kafka or RabbitMQ.
 
 When accepted consumption crosses an account or user threshold of 80%, 90%, or 100%, `QuotaEventProducer` writes a `quota.threshold.reached` event to the `outbox_events` table in the **same database transaction** as the usage update and low-credit notification. If the transaction rolls back, the event is not published.
