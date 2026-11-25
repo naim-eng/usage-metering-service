@@ -28,6 +28,7 @@ export default defineConfig({
 
     env: {
       NEXT_BUILD_DIR: ".next-e2e",
+      E2E_AUTH_RATE_LIMIT: "1",
       AUTH_DATABASE_URL:
         "postgresql://metering_e2e:e2e_local_password_not_for_production@127.0.0.1:5434/usage_metering_e2e",
       BETTER_AUTH_SECRET:

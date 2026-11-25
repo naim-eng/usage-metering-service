@@ -86,12 +86,13 @@ export default function SignUpPage() {
               <p className="mt-3 text-slate-600">
                 Your customer account has been registered successfully.
               </p>
-              <Link
-                href="/"
+              <button
+                type="button"
+                onClick={() => window.location.replace("/")}
                 className="mt-7 inline-block rounded-xl bg-violet-600 px-6 py-3 font-semibold text-white hover:bg-violet-700"
               >
                 Continue to dashboard
-              </Link>
+              </button>
             </div>
           ) : (
             <>
