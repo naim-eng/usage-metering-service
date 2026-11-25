@@ -1,12 +1,22 @@
 # Usage Metering and Quota Service
 
-A backend service for tracking resource consumption and enforcing configurable usage quotas across accounts and individual users.
+A full-stack usage metering and quota management platform for tracking resource consumption and enforcing configurable account and user quotas through customer projects.
 
 Built with **TypeScript, Node.js, Express 5, Prisma ORM, and PostgreSQL 17**, the service demonstrates transactional quota enforcement, account isolation, idempotency, concurrent request handling, custom plan management, historical reporting, and a DDD-inspired Clean Architecture.
 
 The project was developed as a backend engineering capstone and includes automated tests, an example client, Docker Compose deployment, an isolated demonstration environment, and reproducible performance testing.
 
 ## Features
+
+- Customer authentication and organization creation.
+- Customer project management and dashboard.
+- Project-scoped API keys with hashed storage.
+- Versioned database migrations and migration tracking.
+- API readiness checks and graceful shutdown.
+- Security headers and API rate limiting.
+- Structured logging and consumer heartbeat monitoring.
+- Read-only outbox monitoring.
+- Automated GitHub Actions CI.
 
 - Account-level and user-level quota management.
 - Predefined and account-owned custom plans.
@@ -36,7 +46,7 @@ The project was developed as a backend engineering capstone and includes automat
 
 | Component | Technology |
 |---|---|
-| Runtime | Node.js 20 |
+| Runtime | Node.js 20 (backend), Node.js 22 (frontend CI) |
 | Language | TypeScript |
 | HTTP framework | Express 5 |
 | ORM | Prisma 6.12 |
@@ -45,6 +55,13 @@ The project was developed as a backend engineering capstone and includes automat
 | TypeScript execution | `tsx` |
 | Containerization | Docker and Docker Compose |
 | Testing | Node.js test runner |
+| Frontend | Next.js 16.4.6 |
+| UI library | React 19.3 |
+| Styling | Tailwind CSS 4.3.3 |
+| Customer authentication | Better Auth |
+| API security | Helmet and Express Rate Limit |
+| Structured logging | Pino |
+| Continuous integration | GitHub Actions |
 | Version control | Git and GitHub |
 
 Prisma is the primary database access layer for the application. The `pg` driver remains available for integration-test verification and database utilities.
@@ -76,6 +93,21 @@ Responsibilities are separated into HTTP, Application, Domain, and Infrastructur
                                    v
                               PostgreSQL
 ```
+
+### Full-Stack Integration
+
+The Next.js customer dashboard uses Better Auth for customer
+sessions and organization membership.
+
+Server-side frontend routes communicate with the Express API
+using administrative authentication.
+
+Each customer project maps to a metering account. External
+applications use project API keys to access account-scoped
+metering operations.
+
+The independent event consumer processes transactional outbox
+events stored in PostgreSQL.
 
 ### HTTP Layer
 
@@ -205,7 +237,7 @@ Prisma is used for:
 - Low-credit notification storage and retrieval.
 - Transactional outbox event creation and processing.
 
-The existing SQL initialization scripts remain responsible for creating and initializing database tables.
+Versioned SQL migrations remain authoritative for database initialization and schema changes.
 
 ### Architecture Trade-offs
 
@@ -301,44 +333,66 @@ Custom plans belong to their creating account and cannot be accessed or modified
 
 ## Authentication and Account Isolation
 
-Authenticated API operations use account API keys.
+The platform separates customer authentication, metering API
+authentication, and administrative authentication.
 
-A newly created account receives an API key that must be sent in the request header:
+### Customer Authentication
 
-```http
-X-API-Key: <account-api-key>
-```
+The customer dashboard uses Better Auth with PostgreSQL.
 
-API keys are generated using cryptographically secure random values.
+Project creation requires an authenticated customer, an active
+organization, verified organization membership, and an owner
+or administrator role.
 
-Only SHA-256 hashes of API keys are stored in PostgreSQL.
+### Account and Project API Keys
 
-Authentication uses Prisma to retrieve the account associated with the hashed key.
+Authenticated metering operations use the following request header:
+
+    X-API-Key: YOUR_API_KEY
+
+Existing account API keys remain supported.
+
+Project API keys resolve to the associated project's metering
+account and support operations protected by account authentication.
+
+Project keys must not be revoked, and their associated project
+must be active with an available metering account.
+
+API keys are generated using cryptographically secure random
+values. Only SHA-256 hashes are stored in PostgreSQL.
+
+New project API key secrets are returned during creation and
+are not returned by the key-listing endpoint.
 
 ### Administrative Authentication
 
-Account creation requires a separate administrative key:
+Account creation and project management endpoints require:
 
-```http
-X-Admin-Key: <admin-api-key>
-```
+    X-Admin-Key: YOUR_ADMIN_API_KEY
 
-The administrative key is configured through the `ADMIN_API_KEY` environment variable.
+The administrative key is configured through ADMIN_API_KEY.
+
+The frontend uses server-side API routes to communicate with
+privileged backend endpoints.
+
+Administrative credentials must never be exposed to the browser.
 
 ### Tenant Isolation
 
-Every authenticated operation is scoped to its account.
+Account-authenticated operations are scoped to the resolved
+metering account.
 
-The application prevents accounts from:
+Project management operations use organization and project
+identifiers to restrict resource access.
 
-- Consuming another account's user's credits.
-- Viewing another account's usage history.
-- Accessing another account's user allowances.
-- Modifying another account's custom plans.
-- Assigning inaccessible custom plans.
-- Viewing another account's low-credit notifications.
+The administrative API key is privileged and is not itself
+restricted to an individual customer organization.
 
-API keys and administrative credentials must never be committed to version control.
+Keep API keys, database credentials, and authentication secrets
+out of version control and browser-side JavaScript.
+
+See the [Customer API Integration Guide](docs/customer-api-guide.md)
+for project API key usage and integration examples.
 
 ## API Reference
 
@@ -353,6 +407,7 @@ http://localhost:3000
 | Method | Endpoint | Purpose |
 |---|---|---|
 | GET | `/health` | Service health check |
+| GET | `/ready` | Database readiness check |
 | GET | `/plans` | List predefined plans |
 | GET | `/plans/custom` | List account-owned custom plans |
 
@@ -383,6 +438,30 @@ http://localhost:3000
 | GET | `/usage/history` | Retrieve paginated request history |
 | GET | `/usage/monthly` | Retrieve monthly usage and plan history |
 | GET | `/notifications` | Retrieve account and user low-credit notifications |
+
+### Customer Project Management
+
+All endpoints in this section require X-Admin-Key.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/projects` | List organization projects |
+| POST | `/projects` | Create a project |
+| GET | `/projects/:projectId/dashboard` | Retrieve project dashboard data |
+| POST | `/projects/:projectId/api-keys` | Generate a project API key |
+| GET | `/projects/:projectId/api-keys` | List project API keys |
+| DELETE | `/projects/:projectId/api-keys/:keyId` | Revoke a project API key |
+
+GET and DELETE requests require an organizationId query parameter.
+POST requests require organizationId in the request body.
+
+The dashboard endpoint supports month, page, and limit parameters.
+
+Project dashboard data includes account and user allowances,
+monthly reporting, usage history, and low-credit notifications.
+
+These privileged endpoints are intended for trusted server-side
+integration, not direct browser-side access.
 
 ### Example: Create a User
 
@@ -494,15 +573,12 @@ Notifications are created when accepted consumption crosses a threshold. Existin
 
 ### Database Migration
 
-The notification table is introduced by:
+The notification schema is defined in
+`sql/005_low_credit_notifications.sql`.
 
-```text
-sql/005_low_credit_notifications.sql
-```
-
-The migration has been applied and tested against `usage_metering_test`.
-
-It has also been applied to the primary `usage_metering` database. The isolated `usage_metering_demo` database must be migrated separately before notification-enabled code is deployed there.
+This migration is managed by the tracked SQL migration runner.
+Docker Compose applies pending migrations automatically before
+starting the dependent application services.
 
 ## Event Producer and Consumer
 
@@ -528,7 +604,13 @@ Failure handling includes:
 - Terminal `failed` status and a recorded error after retries are exhausted.
 - Attempt-number and lease checks to prevent stale workers from marking superseded attempts as completed.
 
-The consumer currently **logs events** rather than sending emails, SMS, push notifications, or other external messages. Processing is designed around at-least-once delivery; external side-effect handlers would also need idempotency safeguards.
+The default event handler performs no external side effects.
+The consumer records structured processing logs and updates
+event status in PostgreSQL.
+
+External notification delivery is not implemented.
+Processing follows an at-least-once model, so future external
+side-effect handlers require idempotency safeguards.
 
 ### Implementation Files
 
@@ -550,21 +632,13 @@ The worker uses the configured PostgreSQL connection, checks for available event
 
 ### Outbox Migration
 
-The outbox schema is defined in:
+The outbox schema is defined in `sql/006_event_outbox.sql`.
 
-```text
-sql/006_event_outbox.sql
-```
+The tracked migration runner creates and maintains the required
+schema through versioned SQL migrations.
 
-Migration `006` creates `outbox_events` and an index for pending events. It has been applied and verified against `usage_metering_test` and the primary `usage_metering` database. A fresh primary database backup was taken before deployment. The demonstration database is separate and must be migrated before using the new event-enabled API there.
-
-For an existing PostgreSQL data volume, apply the migration explicitly; scripts under `/docker-entrypoint-initdb.d/` only execute when a new database volume is initialized.
-
-```bash
-docker compose exec -T db \
-  psql -v ON_ERROR_STOP=1 -U metering -d usage_metering \
-  < sql/006_event_outbox.sql
-```
+Do not apply individual migration files manually to databases
+managed by the migration runner.
 
 ## Idempotency
 
@@ -717,319 +791,236 @@ The regression test is retained as an automated safeguard. The original intermit
 - Docker Engine or Docker Desktop.
 - Docker Compose.
 - Git.
-- Node.js 20 and npm for local development.
+- Node.js 20 for backend development.
+- Node.js 22 recommended for frontend development, matching CI.
+- npm.
 
 ### 1. Clone the Repository
 
-```bash
-git clone https://github.com/naim-eng/usage-metering-service.git
-cd usage-metering-service
-```
+    git clone https://github.com/naim-eng/usage-metering-service.git
+    cd usage-metering-service
+    git checkout feature/saas-platform
 
-### 2. Configure Environment Variables
+### 2. Configure the Backend
 
-Create a local environment configuration:
+    cp -n .env.example .env
 
-```bash
-cp .env.example .env
-```
+Replace the placeholder database password and administrative API key with strong credentials.
 
-Configure a strong database password and administrative API key.
+Do not commit environment files or real credentials.
 
-The Docker Compose configuration requires:
+### 3. Start the Backend Services
 
-```text
-DB_PASSWORD
-ADMIN_API_KEY
-```
+    docker compose up -d --build db api consumer
 
-Additional database environment variables are used when running the application directly on the host.
+The migration service applies pending SQL migrations before the API and consumer start.
 
-Do not commit `.env`, `prisma/.env`, or real credentials.
+Local service addresses:
 
-### 3. Start PostgreSQL
+- PostgreSQL: 127.0.0.1:5433
+- Backend API: http://localhost:3000
+- Database: usage_metering
 
-For local development:
+### 4. Verify Backend Readiness
 
-```bash
-docker compose up -d db
-```
+    docker compose ps
+    curl http://localhost:3000/health
+    curl http://localhost:3000/ready
 
-The primary PostgreSQL container exposes its database on:
+Both HTTP endpoints should return status 200.
 
-```text
-127.0.0.1:5433
-```
+### 5. Start the Customer Dashboard
 
-The main database is:
+    cd web
+    npm ci
+    cp -n .env.example .env.local
 
-```text
-usage_metering
-```
+Configure the frontend environment using the instructions in [web/README.md](web/README.md).
 
-### 4. Install Dependencies
+The database connection must target the migrated database, and the administrative API key must match the backend configuration.
 
-```bash
-npm ci
-```
+    npm run dev -- --port 3002
 
-### 5. Generate Prisma Client
+Open http://localhost:3002 in your browser.
 
-```bash
-npx prisma generate
-```
+## Native Backend Development
 
-Prisma generates the typed client from:
+The backend can also run directly from source while PostgreSQL
+runs in Docker.
 
-```text
-prisma/schema.prisma
-```
+From the repository root, install dependencies:
 
-The client output is excluded from Git.
+    npm ci
 
-### 6. Start the API
+Generate the Prisma client:
 
-```bash
-npm start
-```
+    npx prisma generate
 
-The default API port is 3000.
+Configure the backend environment using .env.example as a reference.
+Preserve existing environment files and credentials.
 
-Verify the health endpoint:
+Start PostgreSQL if it is not already running:
 
-```bash
-curl http://localhost:3000/health
-```
+    docker compose up -d db
 
-Expected response:
+Apply pending database migrations:
 
-```json
-{
-  "status": "ok"
-}
-```
+    npx tsx scripts/migrations/run.ts
 
-Before starting the notification- and event-enabled API against an existing database, apply migrations `005` and `006` to that database as needed.
+Start the backend:
+
+    npm start
+
+The native backend requires port 3000 to be available.
+Do not start it alongside a Docker API using the same port.
+
+Runtime database connections use the DB_* environment variables.
 
 ## Docker Deployment
 
-The Docker Compose configuration provides separate main and demonstration services.
+Docker Compose provides isolated primary and demonstration environments.
 
 ### Main Services
 
 | Service | Purpose |
 |---|---|
 | `db` | Primary PostgreSQL database |
+| `migrate` | One-time SQL migration runner |
 | `api` | Main HTTP API |
-| `consumer` | Independent Event Consumer (enabled with the `events` profile) |
+| `consumer` | Independent event consumer |
 
-Start the main application:
+Start the backend and consumer:
 
-```bash
-docker compose up -d --build db api
-```
+    docker compose up -d --build db api consumer
 
-The main API is accessible at:
+The migration service waits for PostgreSQL to become healthy.
+The API and consumer require successful migration completion.
 
-```text
-http://localhost:3000
-```
+The API and database ports are bound to the local loopback interface.
 
-### Run the Docker Event Consumer
+### Event Consumer
 
-The `consumer` service belongs to the optional `events` profile, so it does not start during an ordinary Docker Compose startup. After migration `006` is applied, start it with:
+The consumer belongs to the optional `events` profile.
 
-```bash
-docker compose --profile events up -d --no-deps --build consumer
-```
+Inspect its logs:
 
-Inspect the worker logs with:
+    docker compose logs --tail=30 consumer
 
-```bash
-docker compose logs --tail=30 consumer
-```
-
-The Event Producer and Consumer were deployed and verified end-to-end against the primary `usage_metering` database. A threshold event was stored as `pending` and then processed as `completed` with one attempt.
+See the [consumer operations guide](docs/consumer-operations.md)
+for monitoring, recovery, retries, and operational limitations.
 
 ### Isolated Demo Services
 
 | Service | Purpose |
 |---|---|
-| `demo-db` | Isolated demonstration PostgreSQL database |
-| `demo-api` | Demonstration API |
-| `demo-client` | Example client |
+| `demo-db` | Isolated demonstration database |
+| `demo-migrate` | Demonstration database migrations |
+| `demo-api` | Demonstration HTTP API |
+| `demo-client` | Example demonstration client |
 
-The demo database is named:
+The demonstration database is `usage_metering_demo`.
+It uses a separate persistent Docker volume.
 
-```text
-usage_metering_demo
-```
+For a fresh or correctly migrated demonstration database:
 
-It has a separate persistent Docker volume from the primary database.
+    docker compose --profile demo run --rm --build demo-client
 
-### Run the Docker Demo
-
-Build the demo images:
-
-```bash
-docker compose build demo-api demo-client
-```
-
-Execute the demonstration:
-
-```bash
-docker compose run --rm --build demo-client
-```
-
-The example client connects to:
-
-```text
-http://demo-api:3000
-```
-
-A successful demonstration ends with:
-
-```text
-Demo completed successfully!
-```
-
-Notification- and event-enabled Docker services require migrations `005` and `006` to be applied to their respective databases before use.
+Existing demonstration databases without migration history require
+schema validation and appropriate baselining before startup.
 
 ### Stop Docker Services
 
-```bash
-docker compose down
-```
+    docker compose stop
 
-This removes containers while preserving named database volumes.
+To remove primary containers while preserving named volumes:
 
-**Do not run `docker compose down -v` unless you intentionally want to delete the stored database data.**
+    docker compose down
+
+Never use `docker compose down -v` unless database deletion
+is explicitly intended.
 
 ## Automated Tests
 
-The project contains multiple automated test suites.
-
-| Suite | Tests |
-|---|---:|
-| Quota unit tests | 6 |
-| Domain policy tests | 6 |
-| Prisma consumption integration tests | 5 |
-| API integration tests, including reporting and notification tests | 27 |
-| Event Consumer integration tests | 6 |
-| Low-credit notification policy tests | 6 |
-
-Total: 56 automated test cases across these suites.
-
-The monthly-reporting regression test performs 30 account-creation and reporting iterations within one test case.
+The backend includes automated unit, integration, and regression tests.
 
 ### TypeScript Validation
 
-```bash
-npm run typecheck
-```
+    npm run typecheck
 
-### Run Standard Project Tests
+### Run All Backend Tests
 
-```bash
-npm test
-```
+    npm test
 
-This runs the quota unit tests and API integration tests.
+### Run Unit Tests
 
-### Run Quota Unit Tests
+    npm run test:unit
 
-```bash
-npm run test:unit
-```
+### Run Integration Tests
 
-### Run API Integration Tests
+    npm run test:integration
 
-```bash
-npm run test:integration
-```
+The integration test runner:
 
-The script:
-
-1. Prepares the isolated test database.
-2. Starts a temporary API on port 3001.
-3. Runs the main API integration tests.
-4. Runs the monthly-reporting regression, notification, and Event Consumer tests.
-5. Stops the temporary server.
-
-The combined API and Event Consumer integration suite passed all 33 tests.
-
-### Run Domain Tests
-
-```bash
-npx tsx --test src/domain/services/QuotaPolicy.test.ts
-```
-
-### Run Low-Credit Notification Policy Tests
-
-```bash
-npx tsx --test src/domain/services/LowCreditNotificationPolicy.test.ts
-```
-
-### Run Prisma Integration Tests
-
-```bash
-npx tsx --test src/application/services/ConsumeCreditsService.integration.test.ts
-```
-
-Prisma integration tests require an appropriately configured test-only `DATABASE_URL`.
-
-They validate that the target database is `usage_metering_test` before running database operations.
-
-### Run Event Consumer Integration Tests
-
-```bash
-DB_NAME=usage_metering_test \
-npx tsx --test src/infrastructure/events/QuotaEventConsumer.integration.test.ts
-```
-
-The six Event Consumer tests verify normal processing, expired-lease recovery, exhausted retries, concurrent event claiming, first-attempt handler failures, and final-attempt failures.
+1. Checks that port 3001 is available.
+2. Prepares the isolated usage_metering_test database.
+3. Applies pending database migrations.
+4. Starts a temporary API on port 3001.
+5. Executes the integration and regression suites.
+6. Stops the temporary API when finished.
 
 ### Test Database Safety
 
-The integration tests must run against:
+Integration tests must use usage_metering_test, never the primary
+usage_metering database.
 
-```text
-usage_metering_test
-```
-
-They must not run against:
-
-```text
-usage_metering
-```
-
-Database safety checks are implemented in the test runner and test infrastructure.
-
-The temporary integration-test API uses port 3001 to avoid interfering with the main API on port 3000.
+The test setup preserves existing test data. Test execution may
+create additional records in the isolated database.
 
 ### Test Coverage
 
-The tests cover:
-
-- API-key authentication.
-- Account isolation.
+- Account authentication and tenant isolation.
 - Account and user quota enforcement.
-- Concurrent consumption.
-- Atomic transaction rollback.
-- Idempotent retries.
-- Conflicting request IDs.
-- Account and user plan switching.
-- Custom plan ownership.
-- Custom plan revisions.
-- Historical plan records.
-- Usage history.
-- Monthly reporting.
-- Account and user allowances.
-- Immediate reporting after account creation.
-- Account and user low-credit notifications.
-- Notification deduplication, authentication, and tenant isolation.
-- Transactional outbox event creation and deduplication.
-- Event Consumer processing, crash recovery, retries, and concurrent claims.
+- Concurrent consumption and transactional consistency.
+- Idempotency and conflicting request identifiers.
+- Custom plans and historical plan revisions.
+- Usage history, allowances, and monthly reporting.
+- Low-credit notifications and deduplication.
+- Transactional outbox event production.
+- Consumer retries, lease recovery, and crash recovery.
+- Customer project creation and API key management.
+- Project-scoped API key authentication.
+- Database configuration and startup validation.
+- Security middleware and trusted proxy configuration.
+- Readiness checks and graceful shutdown.
+- Structured logging and consumer heartbeat reporting.
+- Read-only outbox monitoring.
+
+### Continuous Integration
+
+GitHub Actions validates both backend and frontend changes.
+
+Backend checks include:
+
+- Prisma client generation.
+- TypeScript validation.
+- Database migration history verification.
+- Migration idempotency verification.
+- Automated unit and integration tests.
+
+Frontend checks include:
+
+- ESLint validation.
+- Next.js type generation and TypeScript validation.
+- Application build verification.
+
+CI uses Node.js 20 for the backend and Node.js 22 for the frontend.
+
+### Frontend Validation
+
+From the web directory:
+
+    npm run lint
+    npm run build
 
 ## Example Client
 
@@ -1110,6 +1101,12 @@ Core tables include:
 | `plan_limit_history` | Historical plan assignments and revisions |
 | `low_credit_notifications` | Account and user threshold notifications |
 | `outbox_events` | Transactional quota-threshold events and processing state |
+| `projects` | Organization-owned customer projects and metering account references |
+| `project_api_keys` | Hashed project credentials and revocation state |
+| `schema_migrations` | Applied migration versions and checksums |
+
+Customer authentication and organization membership data are
+stored separately in the PostgreSQL `auth` schema.
 
 ### SQL Initialization Files
 
@@ -1127,6 +1124,9 @@ sql/
 | `004_idempotency_balances.sql` | Recorded balances for idempotent retries |
 | `005_low_credit_notifications.sql` | Notification table, constraints, and indexes |
 | `006_event_outbox.sql` | Transactional outbox table and pending-event index |
+| `007_customer_auth.sql` | Customer authentication schema |
+| `008_customer_projects.sql` | Customer project management |
+| `009_project_api_keys.sql` | Project-scoped API keys |
 
 These files remain part of the project after introducing Prisma.
 
@@ -1138,101 +1138,58 @@ PostgreSQL uses named Docker volumes.
 
 Database contents persist across ordinary container restarts.
 
-Initialization scripts execute when a new empty PostgreSQL data volume is initialized.
+Database initialization and schema upgrades are managed by the dedicated SQL migration runner:
+
+    npx tsx scripts/migrations/run.ts
+
+The runner uses the configured database connection and records applied migrations in `public.schema_migrations`.
+
+Migrations are applied in version order, protected by PostgreSQL advisory locking, and executed transactionally. Previously applied migrations are validated using their filenames and SHA-256 checksums.
+
+Docker Compose runs the migration service automatically before starting the API or event consumer.
+
+Existing databases without migration history require a validated baseline before the migration runner can proceed. The baseline utility is located at `scripts/migrations/baseline.ts` and supports dry-run validation against a migrated reference database.
+
+Do not modify previously applied migration files.
 
 Do not delete or reset database volumes unless data loss is explicitly intended.
 
 ## Project Structure
 
-```text
-usage-metering-service/
-|
-|-- prisma/
-|   |-- schema.prisma
-|
-|-- sql/
-|   |-- 001_initial_schema.sql
-|   |-- 002_seed_plans.sql
-|   |-- 003_plan_history.sql
-|   |-- 004_idempotency_balances.sql
-|   |-- 005_low_credit_notifications.sql
-|   |-- 006_event_outbox.sql
-|
-|-- src/
-|   |-- index.ts
-|   |-- auth.ts
-|   |-- api-keys.ts
-|   |-- plans.ts
-|   |-- allowances.ts
-|   |-- history.ts
-|   |-- reports.ts
-|   |-- notifications.ts
-|   |-- db.ts
-|   |
-|   |-- domain/
-|   |   |-- services/
-|   |       |-- QuotaPolicy.ts
-|   |       |-- QuotaPolicy.test.ts
-|   |       |-- LowCreditNotificationPolicy.ts
-|   |       |-- LowCreditNotificationPolicy.test.ts
-|   |
-|   |-- application/
-|   |   |-- services/
-|   |       |-- ConsumeCreditsService.ts
-|   |       |-- CreateAccountService.ts
-|   |       |-- CreateUserService.ts
-|   |       |-- ChangeAccountPlanService.ts
-|   |       |-- ChangeUserPlanService.ts
-|   |       |-- CustomPlanService.ts
-|   |       |-- ListPlansService.ts
-|   |       |-- GetUsageHistoryService.ts
-|   |       |-- GetAllowancesService.ts
-|   |       |-- GetMonthlyReportService.ts
-|   |       |-- GetNotificationsService.ts
-|   |       |-- ConsumeCreditsService.integration.test.ts
-|   |
-|   |-- infrastructure/
-|   |   |-- database/
-|   |   |-- repositories/
-|   |       |-- LowCreditNotificationRepository.ts
-|   |   |-- events/
-|   |       |-- QuotaEventProducer.ts
-|   |       |-- QuotaEventConsumer.ts
-|   |       |-- QuotaEventConsumer.integration.test.ts
-|   |       |-- run-consumer.ts
-|   |       |-- run-test-consumer.ts
-|   |
-|   |-- generated/
-|   |   |-- prisma/
-|   |
-|   |-- integration.test.ts
-|   |-- monthly-report-regression.test.ts
-|   |-- low-credit-notifications.integration.test.ts
-|   |-- test-quota.ts
-|   |-- test-db.ts
-|   |-- load-test.ts
-|
-|-- scripts/
-|   |-- setup-test-db.sh
-|   |-- run-integration-tests.sh
-|
-|-- examples/
-|   |-- demo-client.ts
-|
-|-- results/
-|   |-- load-test-results.md
-|
-|-- backups/
-|
-|-- Dockerfile
-|-- docker-compose.yml
-|-- prisma.config.ts
-|-- package.json
-|-- tsconfig.json
-|-- README.md
-```
+The repository is organized around the backend, customer dashboard,
+database migrations, operational tooling, and documentation.
 
-Generated Prisma files, local secrets, and environment-specific files are not intended to be committed.
+| Path | Responsibility |
+|---|---|
+| `src/index.ts` | Express API entry point |
+| `src/auth.ts` | Account and project API key authentication |
+| `src/projects.ts` | Customer project management endpoints |
+| `src/domain/services/` | Quota and notification business rules |
+| `src/application/services/` | Application workflows |
+| `src/infrastructure/database/` | Database access and configuration |
+| `src/infrastructure/repositories/` | Persistence and transaction operations |
+| `src/infrastructure/events/` | Event production, processing, and monitoring |
+| `src/infrastructure/logging/` | Structured logging and error handling |
+| `prisma/` | Prisma database schema |
+| `sql/` | Versioned SQL migrations |
+| `scripts/migrations/` | Migration runner and baseline utility |
+| `scripts/monitor-outbox.ts` | Read-only event monitoring |
+| `scripts/` | Integration testing and database setup |
+| `web/src/app/` | Next.js pages, components, and server-side API routes |
+| `web/src/lib/` | Customer authentication and authorization |
+| `web/.env.example` | Frontend environment configuration template |
+| `docs/` | Customer integration and operational guides |
+| `examples/` | Example API client |
+| `results/` | Historical performance testing results |
+| `.github/workflows/` | Continuous integration |
+| `Dockerfile` | Backend container image |
+| `docker-compose.yml` | Local and demonstration environments |
+| `.env.example` | Backend environment configuration template |
+
+Automated tests are located alongside the relevant backend modules.
+
+Generated Prisma files, local secrets, and environment-specific
+configuration files must not be committed.
 
 ## Design Decisions and Trade-offs
 
@@ -1308,51 +1265,61 @@ The service is built around the following assumptions:
 - Plan changes preserve previously consumed credits.
 - Consumption is all-or-nothing.
 - Every logical consumption request has a unique request ID.
-- Account API keys must be kept secret.
+- Account and project API keys must be kept secret.
 - Usage is nonnegative.
 - The current API does not support reversing previously consumed credits.
 
-The service is a usage-metering backend rather than a complete subscription billing platform.
+Each customer project is associated with a metering account.
 
 ## Limitations
 
 Current limitations include:
 
-- No subscription billing or payment processing.
-- No graphical administration dashboard.
-- No production-scale performance testing.
-- No email, SMS, or push notification delivery.
-- Account-level locking may reduce throughput under heavy concurrent traffic.
-- Event handling currently logs events; downstream integrations and external delivery are not implemented.
-- The consumer provides at-least-once processing rather than an exactly-once guarantee for external side effects.
+- No dedicated platform administration dashboard.
+- No production-scale performance validation.
+- No external email, SMS, or push notification delivery.
+- Account-level locking may limit throughput under heavy concurrency.
+- API rate limiting is not distributed across multiple instances.
+- Event processing provides at-least-once semantics.
+- The default event handler performs no external side effects.
+- No automatic replay of permanently failed events.
+- No automated monitoring alerts.
+- Hosted PostgreSQL TLS connectivity has not been validated.
+- The existing demonstration database requires migration verification.
 
 ## Project Verification
 
-The refactored implementation has successfully completed:
+The implementation has been validated through:
 
-- TypeScript validation.
-- 6 quota unit tests.
-- 6 Domain policy tests.
-- 5 Prisma consumption integration tests.
-- 27 HTTP integration tests, including the monthly-reporting regression and notification tests.
-- 6 low-credit notification policy tests.
-- 30 immediate account-creation/reporting checks within the regression test.
-- Five consecutive successful runs of the original 24-test integration suite during stability verification.
-- A successful isolated Docker Compose demo with six passing checks.
-- 6 Event Consumer integration tests, including crash recovery, retries, and concurrent event claiming.
-- A successful 33-test combined API and Event Consumer integration run.
-- Successful primary Docker deployment and end-to-end processing of a quota-threshold event.
+- Backend TypeScript checks.
+- Automated unit, integration, and regression tests.
+- Database migration history and idempotency checks.
+- Concurrent quota enforcement and transaction rollback tests.
+- Project API key authentication and isolation tests.
+- Event consumer crash recovery and graceful shutdown tests.
+- Frontend linting, TypeScript checks, and build verification.
+- Automated GitHub Actions workflows.
 
-The project demonstrates practical backend engineering concepts including transactional consistency, account isolation, idempotency, atomic quota enforcement, Prisma ORM integration, and DDD-inspired separation of responsibilities.
+The latest recorded backend test baseline contains 152 passing
+tests: 95 unit tests and 57 integration tests.
+
+Historical performance results are documented in
+[load-test-results.md](results/load-test-results.md).
 
 ## Project Status
 
-The Usage Metering and Quota Service has been completed and published on GitHub.
+The Usage Metering and Quota Service has evolved from a backend
+quota enforcement service into a full-stack usage metering platform.
 
-The application implements DDD-inspired Clean Architecture, Prisma ORM, atomic quota enforcement without version counters, transactional concurrency protection, and historical usage reporting.
+The implementation includes a customer dashboard, organization-based
+project management, project API keys, transactional quota enforcement,
+historical reporting, asynchronous event processing, database migration
+tracking, and operational monitoring.
 
-The implementation has passed TypeScript validation, automated unit and integration tests, and an isolated Docker Compose demonstration.
+Current development takes place on the feature/saas-platform branch.
 
-Low-credit notifications and the transactional Event Producer and Consumer are implemented, deployed to the primary Docker environment, and merged into `main`. The combined API and Event Consumer integration suite passed 33 tests, and the separate notification policy suite passed 6 tests. Migrations `005` and `006` have been applied to the primary `usage_metering` database. The isolated demonstration database remains separately managed and requires the appropriate migrations before deploying these features there.
+The platform is configured for local development and validation.
 
-The project is published on GitHub at `https://github.com/naim-eng/usage-metering-service`, with local and remote `main` synchronized at commit `123029b` (`feat: add transactional event outbox producer and consumer`). The primary API, PostgreSQL database, and independent Docker Event Consumer were verified running successfully.
+Further frontend review, end-to-end system testing, security review,
+and backup and restoration verification remain part of the
+local development roadmap.

@@ -1,36 +1,81 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Usage Metering Customer Dashboard
 
-## Getting Started
+The customer-facing web application for the Usage Metering and Quota Service.
 
-First, run the development server:
+## Features
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+- Customer registration and sign-in.
+- Organization creation.
+- Customer project creation and listing.
+- Project usage and quota dashboards.
+- Project API key management.
+- Server-side authorization and backend API integration.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Technology
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- Next.js 16 and React 19.
+- TypeScript and Tailwind CSS.
+- Better Auth with PostgreSQL.
+- Kysely and node-postgres.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Local Development
 
-## Learn More
+Start the backend and PostgreSQL using the instructions in the root README.
 
-To learn more about Next.js, take a look at the following resources:
+From the web directory, install dependencies:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+    npm ci
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Create the local environment configuration:
 
-## Deploy on Vercel
+    cp -n .env.example .env.local
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Configure the following environment variables:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| Variable | Purpose |
+|---|---|
+| AUTH_DATABASE_URL | PostgreSQL connection to the migrated database |
+| BETTER_AUTH_SECRET | Random authentication secret of at least 32 characters |
+| BETTER_AUTH_URL | Frontend URL, normally http://localhost:3002 |
+| METERING_API_URL | Backend URL, normally http://localhost:3000 |
+| METERING_ADMIN_API_KEY | Must match the backend ADMIN_API_KEY |
+| BETTER_AUTH_TRUSTED_ORIGINS | Optional additional trusted origins |
+
+URL-encode special characters in database connection credentials.
+
+Generate a strong authentication secret using:
+
+    openssl rand -hex 32
+
+Preserve existing environment files and credentials.
+
+The authentication database must have the required SQL migrations applied.
+
+Start the frontend:
+
+    npm run dev -- --port 3002
+
+Open http://localhost:3002 in your browser.
+
+## Security
+
+- Keep database credentials and administrative API keys server-side.
+- Never commit .env.local or real credentials.
+- Never expose administrative credentials through NEXT_PUBLIC_ variables.
+- Customer authentication uses the PostgreSQL auth schema.
+
+## Validation
+
+Run linting:
+
+    npm run lint
+
+Check the application build:
+
+    npm run build
+
+## Related Documentation
+
+- [Main project documentation](../README.md)
+- [Customer API integration guide](../docs/customer-api-guide.md)
+- [Event consumer operations](../docs/consumer-operations.md)
