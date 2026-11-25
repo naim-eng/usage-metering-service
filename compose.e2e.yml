@@ -1,0 +1,63 @@
+name: usage-metering-e2e
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: metering_e2e
+      POSTGRES_PASSWORD: e2e_local_password_not_for_production
+      POSTGRES_DB: usage_metering_e2e
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - e2e_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U metering_e2e -d usage_metering_e2e
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build: .
+    command: ["npx", "tsx", "scripts/migrations/run.ts"]
+    restart: "no"
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: metering_e2e
+      DB_PASSWORD: e2e_local_password_not_for_production
+      DB_NAME: usage_metering_e2e
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build: .
+    ports:
+      - "127.0.0.1:3003:3000"
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: metering_e2e
+      DB_PASSWORD: e2e_local_password_not_for_production
+      DB_NAME: usage_metering_e2e
+      PORT: "3000"
+      ADMIN_API_KEY: e2e_local_admin_key_not_for_production
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  e2e_postgres_data:

@@ -41,3 +41,13 @@ yarn-error.log*
 next-env.d.ts
 
 !.env.example
+
+# Playwright
+/test-results/
+/playwright-report/
+/playwright/.cache/
+/playwright/.auth/
+/blob-report/
+
+# Isolated E2E build output
+/.next-e2e/
