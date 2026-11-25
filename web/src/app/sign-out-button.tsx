@@ -8,6 +8,8 @@ export default function SignOutButton() {
   const [error, setError] = useState("");
 
   async function handleSignOut() {
+    if (pending) return;
+
     setPending(true);
     setError("");
 

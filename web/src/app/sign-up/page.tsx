@@ -15,7 +15,24 @@ export default function SignUpPage() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (loading || success) return;
+
     setError("");
+
+    if (!name.trim() || name.trim().length > 100) {
+      setError("Enter a valid name of up to 100 characters.");
+      return;
+    }
+
+    if (!email.trim()) {
+      setError("Enter your email address.");
+      return;
+    }
+
+    if (password.length < 8) {
+      setError("Password must contain at least 8 characters.");
+      return;
+    }
 
     if (password !== confirmPassword) {
       setError("Passwords do not match.");
@@ -73,7 +90,7 @@ export default function SignUpPage() {
                 href="/"
                 className="mt-7 inline-block rounded-xl bg-violet-600 px-6 py-3 font-semibold text-white hover:bg-violet-700"
               >
-                View dashboard preview
+                Continue to dashboard
               </Link>
             </div>
           ) : (
@@ -154,6 +171,16 @@ export default function SignUpPage() {
                   {loading ? "Creating account..." : "Create account"}
                 </button>
               </form>
+
+              <p className="mt-6 text-center text-sm text-slate-600">
+                Already have an account?{" "}
+                <Link
+                  href="/sign-in"
+                  className="font-semibold text-violet-600 hover:underline"
+                >
+                  Sign in
+                </Link>
+              </p>
             </>
           )}
         </div>

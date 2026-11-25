@@ -1,37 +1,52 @@
 import { Suspense } from "react";
-import { headers } from "next/headers";
-import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
-import DashboardPreview from "./dashboard-preview";
+import { resolveWorkspace } from "@/lib/resolve-workspace";
+import WorkspaceOverview from "./workspace-overview";
+import WorkspaceSelector from "./workspace-selector";
 
-async function AuthenticatedDashboard() {
-  const requestHeaders = await headers();
-  const session = await auth.api.getSession({
-    headers: requestHeaders,
-  });
+type SearchParams = Promise<{
+  workspaceActivation?: string | string[];
+}>;
 
-  if (!session?.user) {
-    redirect("/sign-in");
+async function AuthenticatedDashboard({
+  searchParams,
+}: {
+  searchParams: SearchParams;
+}) {
+  const { organizations, activeOrganization } =
+    await resolveWorkspace();
+
+  if (!activeOrganization) {
+    const query = await searchParams;
+    return (
+      <WorkspaceSelector
+        activationAttempted={query.workspaceActivation === "attempted"}
+        organizations={organizations.map(({ id, name, slug }) => ({
+          id,
+          name,
+          slug,
+        }))}
+      />
+    );
   }
-
-  const organizations = await auth.api.listOrganizations({
-    headers: requestHeaders,
-  });
-
-  if (organizations.length === 0) {
-    redirect("/create-organization");
-  }
-
-  const activeOrganization = organizations.find(
-    (organization) => organization.id === session.session.activeOrganizationId
-  );
 
   return (
-    <DashboardPreview organizationName={activeOrganization?.name ?? null} />
+    <WorkspaceOverview
+      key={activeOrganization.id}
+      organizationName={activeOrganization.name}
+      activeOrganizationId={activeOrganization.id}
+      organizations={organizations.map(({ id, name }) => ({
+        id,
+        name,
+      }))}
+    />
   );
 }
 
-export default function HomePage() {
+export default function HomePage({
+  searchParams,
+}: {
+  searchParams: SearchParams;
+}) {
   return (
     <Suspense
       fallback={
@@ -40,7 +55,7 @@ export default function HomePage() {
         </main>
       }
     >
-      <AuthenticatedDashboard />
+      <AuthenticatedDashboard searchParams={searchParams} />
     </Suspense>
   );
 }

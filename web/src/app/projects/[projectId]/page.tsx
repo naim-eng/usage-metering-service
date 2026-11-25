@@ -1,7 +1,7 @@
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
+import { resolveWorkspace } from "@/lib/resolve-workspace";
 import ProjectDashboardClient from "./project-dashboard-client";
+
 export const instant = false;
 
 export default async function ProjectDashboardPage({
@@ -9,32 +9,18 @@ export default async function ProjectDashboardPage({
 }: {
   params: Promise<{ projectId: string }>;
 }) {
-  const [requestHeaders, { projectId }] = await Promise.all([
-    headers(),
-    params,
-  ]);
+  const [{ activeOrganization }, { projectId }] =
+    await Promise.all([resolveWorkspace(), params]);
 
-  const session = await auth.api.getSession({
-    headers: requestHeaders,
-  });
-
-  if (!session?.user) redirect("/sign-in");
-
-  const organizations = await auth.api.listOrganizations({
-    headers: requestHeaders,
-  });
-
-  if (organizations.length === 0) redirect("/create-organization");
-
-  const activeOrganization = organizations.find(
-    (organization) =>
-      organization.id === session.session.activeOrganizationId
-  );
+  if (!activeOrganization) {
+    redirect("/");
+  }
 
   return (
     <ProjectDashboardClient
+      key={`${activeOrganization.id}:${projectId}`}
       projectId={projectId}
-      organizationName={activeOrganization?.name ?? "Workspace"}
+      organizationName={activeOrganization.name}
     />
   );
 }

@@ -29,8 +29,8 @@ export default function CreateOrganizationForm() {
     const cleanName = name.trim();
     const slug = makeSlug(cleanName);
 
-    if (cleanName.length < 2 || !slug) {
-      setError("Enter an organization name with letters or numbers.");
+    if (cleanName.length < 2 || cleanName.length > 100 || !slug) {
+      setError("Enter a name of 2-100 characters containing letters or numbers.");
       return;
     }
 
@@ -44,7 +44,7 @@ export default function CreateOrganizationForm() {
 
       if (result.error || !result.data) {
         setError(
-          "Unable to create organization. The name may already be in use."
+          "Unable to create organization. Check the name and try again."
         );
         return;
       }

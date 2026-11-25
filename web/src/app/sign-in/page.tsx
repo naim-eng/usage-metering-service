@@ -18,6 +18,12 @@ export default function SignInPage() {
     if (loading) return;
 
     setError("");
+
+    if (!email.trim() || !password) {
+      setError("Enter your email address and password.");
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -29,24 +35,6 @@ export default function SignInPage() {
       if (result.error) {
         setError("Invalid email or password. Please try again.");
         return;
-      }
-
-      const organizations = await authClient.organization.list();
-
-      if (organizations.error) {
-        setError("Signed in, but unable to load your workspaces.");
-        return;
-      }
-
-      if (organizations.data?.length === 1) {
-        const active = await authClient.organization.setActive({
-          organizationId: organizations.data[0].id,
-        });
-
-        if (active.error) {
-          setError("Signed in, but unable to select your workspace.");
-          return;
-        }
       }
 
       router.replace("/");

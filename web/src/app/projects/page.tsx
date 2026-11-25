@@ -1,33 +1,20 @@
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
+import { resolveWorkspace } from "@/lib/resolve-workspace";
 import ProjectsClient from "./projects-client";
 
 export const instant = false;
 
 export default async function ProjectsPage() {
-  const requestHeaders = await headers();
+  const { activeOrganization } = await resolveWorkspace();
 
-  const session = await auth.api.getSession({
-    headers: requestHeaders,
-  });
-
-  if (!session?.user) redirect("/sign-in");
-
-  const organizations = await auth.api.listOrganizations({
-    headers: requestHeaders,
-  });
-
-  if (organizations.length === 0) redirect("/create-organization");
-
-  const activeOrganization = organizations.find(
-    (organization) =>
-      organization.id === session.session.activeOrganizationId
-  );
+  if (!activeOrganization) {
+    redirect("/");
+  }
 
   return (
     <ProjectsClient
-      organizationName={activeOrganization?.name ?? "Workspace"}
+      key={activeOrganization.id}
+      organizationName={activeOrganization.name}
     />
   );
 }
