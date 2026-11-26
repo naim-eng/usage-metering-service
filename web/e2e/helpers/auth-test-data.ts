@@ -106,12 +106,20 @@ export type TestOrganization = {
 };
 
 export function createTestOrganization(
-  account: TestAccount
+  account: TestAccount,
+  index = 1
 ): TestOrganization {
   assertTestEmail(account.email);
 
-  const slug = account.email.split("@")[0]
+  if (!Number.isInteger(index) || index < 1 || index > 99) {
+    throw new Error("Invalid E2E organization index.");
+  }
+
+  const baseSlug = account.email.split("@")[0]
     .replace(/^e2e-auth-/, "e2e-org-");
+
+  const slug =
+    index === 1 ? baseSlug : `${baseSlug}-${index}`;
 
   return {
     name: slug,
@@ -128,7 +136,13 @@ function assertTestOrganization(
   const expectedSlug = email.split("@")[0]
     .replace(/^e2e-auth-/, "e2e-org-");
 
-  if (slug !== expectedSlug) {
+  const suffix = slug.slice(expectedSlug.length);
+
+  const isAdditionalOrganization =
+    slug.startsWith(expectedSlug) &&
+    /^-(?:[2-9]|[1-9][0-9])$/.test(suffix);
+
+  if (slug !== expectedSlug && !isAdditionalOrganization) {
     throw new Error(
       "Refusing database operation for an unrelated organization."
     );
@@ -195,5 +209,336 @@ export async function countTestSessions(
     );
 
     return result.rows[0].count;
+  });
+}
+
+export type TestProject = {
+  name: string;
+  slug: string;
+};
+
+export function createTestProject(
+  account: TestAccount
+): TestProject {
+  assertTestEmail(account.email);
+
+  const customerId = account.email
+    .split("@")[0]
+    .replace(/^e2e-auth-/, "");
+
+  const slug = `e2e-project-${customerId}-${randomUUID()}`;
+
+  return {
+    name: slug,
+    slug,
+  };
+}
+
+function assertTestProject(
+  email: string,
+  slug: string
+): void {
+  assertTestEmail(email);
+
+  const customerId = email
+    .split("@")[0]
+    .replace(/^e2e-auth-/, "");
+
+  const prefix = `e2e-project-${customerId}-`;
+
+  const uuidPattern =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+  if (
+    !slug.startsWith(prefix) ||
+    !uuidPattern.test(slug.slice(prefix.length))
+  ) {
+    throw new Error(
+      "Refusing database operation for an unrelated project."
+    );
+  }
+}
+
+export async function countTestProjects(
+  email: string,
+  organizationSlug: string,
+  projectSlug: string
+): Promise<number> {
+  assertTestOrganization(email, organizationSlug);
+  assertTestProject(email, projectSlug);
+
+  return withE2EDatabase(async (client) => {
+    const result = await client.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count
+       FROM public.projects AS project
+       JOIN auth."organization" AS organization
+         ON organization.id = project.organization_id
+       WHERE organization.slug = $1
+         AND project.slug = $2`,
+      [organizationSlug, projectSlug]
+    );
+
+    return result.rows[0].count;
+  });
+}
+
+export async function cleanupTestProject(
+  email: string,
+  organizationSlug: string,
+  projectSlug: string
+): Promise<number> {
+  assertTestOrganization(email, organizationSlug);
+  assertTestProject(email, projectSlug);
+
+  return withE2EDatabase(async (client) => {
+    await client.query("BEGIN");
+
+    try {
+      const result = await client.query<{
+        id: string;
+        metering_account_id: string | null;
+      }>(
+        `SELECT project.id, project.metering_account_id
+         FROM public.projects AS project
+         JOIN auth."organization" AS organization
+           ON organization.id = project.organization_id
+         JOIN auth."member" AS member
+           ON member."organizationId" = organization.id
+         JOIN auth."user" AS customer
+           ON customer.id = member."userId"
+         WHERE organization.slug = $1
+           AND project.slug = $2
+           AND customer.email = $3
+           AND member.role = 'owner'
+         FOR UPDATE OF project`,
+        [organizationSlug, projectSlug, email]
+      );
+
+      if (result.rows.length === 0) {
+        await client.query("COMMIT");
+        return 0;
+      }
+
+      if (result.rows.length !== 1) {
+        throw new Error(
+          "Unexpected project ownership records."
+        );
+      }
+
+      const project = result.rows[0];
+
+      await client.query(
+        `DELETE FROM public.project_api_keys
+         WHERE project_id = $1`,
+        [project.id]
+      );
+
+      const deleted = await client.query(
+        `DELETE FROM public.projects
+         WHERE id = $1`,
+        [project.id]
+      );
+
+      if (project.metering_account_id !== null) {
+        await client.query(
+          `DELETE FROM public.plan_limit_history
+           WHERE account_id = $1`,
+          [project.metering_account_id]
+        );
+
+        await client.query(
+          `DELETE FROM public.accounts
+           WHERE id = $1`,
+          [project.metering_account_id]
+        );
+      }
+
+      await client.query("COMMIT");
+
+      return deleted.rowCount ?? 0;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    }
+  });
+}
+
+export async function setTestOrganizationOwnerRole(
+  email: string,
+  organizationSlug: string,
+  role: "owner" | "member"
+): Promise<void> {
+  assertTestOrganization(email, organizationSlug);
+
+  if (role !== "owner" && role !== "member") {
+    throw new Error("Invalid E2E membership role.");
+  }
+
+  await withE2EDatabase(async (client) => {
+    const result = await client.query(
+      `UPDATE auth."member" AS member
+       SET role = $3
+       FROM auth."organization" AS organization,
+            auth."user" AS customer
+       WHERE member."organizationId" = organization.id
+         AND member."userId" = customer.id
+         AND organization.slug = $1
+         AND customer.email = $2
+         AND member.role = $4`,
+      [
+        organizationSlug,
+        email,
+        role,
+        role === "owner" ? "member" : "owner",
+      ]
+    );
+
+    if (result.rowCount !== 1) {
+      throw new Error(
+        "Expected exactly one E2E membership role update."
+      );
+    }
+  });
+}
+
+async function resolveOwnedTestProject(
+  client: Client,
+  email: string,
+  organizationSlug: string,
+  projectSlug: string
+): Promise<{ id: string; accountId: string }> {
+  assertTestOrganization(email, organizationSlug);
+  assertTestProject(email, projectSlug);
+
+  const result = await client.query<{
+    id: string;
+    account_id: string;
+  }>(
+    `SELECT
+       project.id,
+       project.metering_account_id AS account_id
+     FROM public.projects AS project
+     JOIN auth."organization" AS organization
+       ON organization.id = project.organization_id
+     JOIN auth."member" AS member
+       ON member."organizationId" = organization.id
+     JOIN auth."user" AS customer
+       ON customer.id = member."userId"
+     WHERE organization.slug = $1
+       AND project.slug = $2
+       AND customer.email = $3
+       AND member.role = 'owner'
+       AND project.metering_account_id IS NOT NULL`,
+    [organizationSlug, projectSlug, email]
+  );
+
+  if (result.rows.length !== 1) {
+    throw new Error("Expected exactly one owned E2E project.");
+  }
+
+  return {
+    id: result.rows[0].id,
+    accountId: result.rows[0].account_id,
+  };
+}
+
+export async function addTestCleanupBlocker(
+  email: string,
+  organizationSlug: string,
+  projectSlug: string
+): Promise<void> {
+  await withE2EDatabase(async (client) => {
+    const project = await resolveOwnedTestProject(
+      client,
+      email,
+      organizationSlug,
+      projectSlug
+    );
+
+    const result = await client.query(
+      `INSERT INTO public.users (
+         account_id,
+         external_user_id,
+         plan_id
+       )
+       SELECT $1, $2, id
+       FROM public.plans
+       WHERE id = 3
+         AND plan_type = 'user'
+         AND owner_account_id IS NULL`,
+      [project.accountId, `cleanup-blocker-${project.id}`]
+    );
+
+    if (result.rowCount !== 1) {
+      throw new Error("Expected exactly one E2E cleanup blocker.");
+    }
+  });
+}
+
+export async function removeTestCleanupBlocker(
+  email: string,
+  organizationSlug: string,
+  projectSlug: string
+): Promise<number> {
+  return withE2EDatabase(async (client) => {
+    const project = await resolveOwnedTestProject(
+      client,
+      email,
+      organizationSlug,
+      projectSlug
+    );
+
+    const result = await client.query(
+      `DELETE FROM public.users
+       WHERE account_id = $1
+         AND external_user_id = $2`,
+      [project.accountId, `cleanup-blocker-${project.id}`]
+    );
+
+    return result.rowCount ?? 0;
+  });
+}
+
+export async function countTestProjectDependencies(
+  email: string,
+  organizationSlug: string,
+  projectSlug: string
+): Promise<{
+  accounts: number;
+  api_keys: number;
+  plan_history: number;
+  users: number;
+}> {
+  return withE2EDatabase(async (client) => {
+    const project = await resolveOwnedTestProject(
+      client,
+      email,
+      organizationSlug,
+      projectSlug
+    );
+
+    const result = await client.query<{
+      accounts: number;
+      api_keys: number;
+      plan_history: number;
+      users: number;
+    }>(
+      `SELECT
+         (SELECT COUNT(*)::int
+          FROM public.accounts
+          WHERE id = $2) AS accounts,
+         (SELECT COUNT(*)::int
+          FROM public.project_api_keys
+          WHERE project_id = $1) AS api_keys,
+         (SELECT COUNT(*)::int
+          FROM public.plan_limit_history
+          WHERE account_id = $2) AS plan_history,
+         (SELECT COUNT(*)::int
+          FROM public.users
+          WHERE account_id = $2) AS users`,
+      [project.id, project.accountId]
+    );
+
+    return result.rows[0];
   });
 }

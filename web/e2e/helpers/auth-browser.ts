@@ -126,3 +126,53 @@ export async function createOrganizationThroughUI(
     })
   ).toBeVisible();
 }
+
+export async function createProjectThroughUI(
+  page: Page,
+  project: { name: string; slug: string }
+): Promise<void> {
+  await page.goto("/projects");
+
+  await expect(
+    page.getByRole("heading", {
+      name: "Projects",
+      exact: true,
+    })
+  ).toBeVisible();
+
+  await page.getByPlaceholder(
+    "Enter your project name",
+    { exact: true }
+  ).fill(project.name);
+
+  await page.getByRole("button", {
+    name: "Create Project",
+    exact: true,
+  }).click();
+
+  await expect(
+    page.getByText(
+      "Your project was created successfully.",
+      { exact: true }
+    )
+  ).toBeVisible();
+
+  await expect(
+    page.getByText("Your new API key", {
+      exact: true,
+    })
+  ).toBeVisible();
+
+  await expect(
+    page.getByRole("heading", {
+      name: project.name,
+      exact: true,
+    })
+  ).toBeVisible();
+
+  await expect(
+    page.getByText(project.slug, {
+      exact: true,
+    }).first()
+  ).toBeVisible();
+}

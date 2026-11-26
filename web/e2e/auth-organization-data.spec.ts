@@ -127,3 +127,86 @@ test("reports zero sessions for a nonexistent customer", async () => {
     await countTestSessions(account.email)
   ).toBe(0);
 });
+
+test("generates distinct workspace identifiers for one customer", () => {
+  const account = createTestAccount();
+
+  const first = createTestOrganization(account);
+  const second = createTestOrganization(account, 2);
+  const last = createTestOrganization(account, 99);
+
+  expect(second.slug).toBe(`${first.slug}-2`);
+  expect(last.slug).toBe(`${first.slug}-99`);
+
+  expect(second.name).toBe(second.slug);
+  expect(last.name).toBe(last.slug);
+
+  expect(
+    new Set([first.slug, second.slug, last.slug]).size
+  ).toBe(3);
+
+  expect(last.slug.length).toBeLessThanOrEqual(50);
+});
+
+test("rejects invalid workspace indexes", () => {
+  const account = createTestAccount();
+
+  for (const index of [-1, 0, 1.5, 100, NaN, Infinity]) {
+    expect(() =>
+      createTestOrganization(account, index)
+    ).toThrow("Invalid E2E organization index.");
+  }
+});
+
+test("accepts valid additional workspace identifiers", async () => {
+  const account = createTestAccount();
+
+  for (const index of [2, 9, 10, 99]) {
+    const organization = createTestOrganization(
+      account,
+      index
+    );
+
+    expect(
+      await countTestOrganizations(
+        account.email,
+        organization.slug
+      )
+    ).toBe(0);
+
+    expect(
+      await cleanupTestOrganization(
+        account.email,
+        organization.slug
+      )
+    ).toBe(0);
+  }
+});
+
+test("rejects malformed additional workspace identifiers", async () => {
+  const account = createTestAccount();
+  const organization = createTestOrganization(account);
+
+  for (const suffix of [
+    "-0",
+    "-1",
+    "-02",
+    "-100",
+    "-2-extra",
+    "-",
+  ]) {
+    const slug = `${organization.slug}${suffix}`;
+
+    await expect(
+      countTestOrganizations(account.email, slug)
+    ).rejects.toThrow(
+      "Refusing database operation for an unrelated organization."
+    );
+
+    await expect(
+      cleanupTestOrganization(account.email, slug)
+    ).rejects.toThrow(
+      "Refusing database operation for an unrelated organization."
+    );
+  }
+});
