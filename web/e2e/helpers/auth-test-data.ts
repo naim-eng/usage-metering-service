@@ -366,37 +366,69 @@ export async function cleanupTestProject(
 export async function setTestOrganizationOwnerRole(
   email: string,
   organizationSlug: string,
-  role: "owner" | "member"
+  role: "owner" | "admin" | "member",
+  expectedRole: "owner" | "admin" | "member" =
+    role === "owner" ? "member" : "owner"
 ): Promise<void> {
   assertTestOrganization(email, organizationSlug);
 
-  if (role !== "owner" && role !== "member") {
-    throw new Error("Invalid E2E membership role.");
+  const validRoles = ["owner", "admin", "member"];
+
+  if (
+    !validRoles.includes(role) ||
+    !validRoles.includes(expectedRole) ||
+    role === expectedRole
+  ) {
+    throw new Error("Invalid E2E membership role transition.");
   }
 
   await withE2EDatabase(async (client) => {
-    const result = await client.query(
-      `UPDATE auth."member" AS member
-       SET role = $3
-       FROM auth."organization" AS organization,
-            auth."user" AS customer
-       WHERE member."organizationId" = organization.id
-         AND member."userId" = customer.id
-         AND organization.slug = $1
-         AND customer.email = $2
-         AND member.role = $4`,
-      [
-        organizationSlug,
-        email,
-        role,
-        role === "owner" ? "member" : "owner",
-      ]
-    );
+    await client.query("BEGIN");
 
-    if (result.rowCount !== 1) {
-      throw new Error(
-        "Expected exactly one E2E membership role update."
+    try {
+      const membership = await client.query<{
+        id: string;
+        role: string;
+      }>(
+        `SELECT member.id, member.role
+         FROM auth."member" AS member
+         JOIN auth."organization" AS organization
+           ON organization.id = member."organizationId"
+         JOIN auth."user" AS customer
+           ON customer.id = member."userId"
+         WHERE organization.slug = $1
+           AND customer.email = $2
+         FOR UPDATE OF member`,
+        [organizationSlug, email]
       );
+
+      if (
+        membership.rows.length !== 1 ||
+        membership.rows[0].role !== expectedRole
+      ) {
+        throw new Error(
+          "Expected exactly one E2E membership with the expected role."
+        );
+      }
+
+      const result = await client.query(
+        `UPDATE auth."member"
+         SET role = $2
+         WHERE id = $1
+           AND role = $3`,
+        [membership.rows[0].id, role, expectedRole]
+      );
+
+      if (result.rowCount !== 1) {
+        throw new Error(
+          "Expected exactly one E2E membership role update."
+        );
+      }
+
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
     }
   });
 }
@@ -540,5 +572,148 @@ export async function countTestProjectDependencies(
     );
 
     return result.rows[0];
+  });
+}
+
+type RemovedTestMembership = {
+  id: string;
+  organizationId: string;
+  userId: string;
+  role: string;
+  createdAt: Date;
+};
+
+export async function removeTestOrganizationMembership(
+  email: string,
+  organizationSlug: string
+): Promise<RemovedTestMembership> {
+  assertTestOrganization(email, organizationSlug);
+
+  return withE2EDatabase(async (client) => {
+    await client.query("BEGIN");
+
+    try {
+      const membership = await client.query<RemovedTestMembership>(
+        `SELECT
+           member.id,
+           member."organizationId",
+           member."userId",
+           member.role,
+           member."createdAt"
+         FROM auth."member" AS member
+         JOIN auth."organization" AS organization
+           ON organization.id = member."organizationId"
+         JOIN auth."user" AS customer
+           ON customer.id = member."userId"
+         WHERE organization.slug = $1
+           AND customer.email = $2
+         FOR UPDATE OF member`,
+        [organizationSlug, email]
+      );
+
+      if (
+        membership.rows.length !== 1 ||
+        membership.rows[0].role !== "owner"
+      ) {
+        throw new Error(
+          "Expected exactly one E2E owner membership."
+        );
+      }
+
+      const original = membership.rows[0];
+
+      const deleted = await client.query(
+        `DELETE FROM auth."member"
+         WHERE id = $1
+           AND "organizationId" = $2
+           AND "userId" = $3
+           AND role = 'owner'`,
+        [
+          original.id,
+          original.organizationId,
+          original.userId,
+        ]
+      );
+
+      if (deleted.rowCount !== 1) {
+        throw new Error(
+          "Expected exactly one E2E membership removal."
+        );
+      }
+
+      await client.query("COMMIT");
+
+      return original;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    }
+  });
+}
+
+export async function restoreTestOrganizationMembership(
+  email: string,
+  organizationSlug: string,
+  membership: RemovedTestMembership
+): Promise<void> {
+  assertTestOrganization(email, organizationSlug);
+
+  if (membership.role !== "owner") {
+    throw new Error(
+      "Refusing to restore a non-owner E2E membership."
+    );
+  }
+
+  await withE2EDatabase(async (client) => {
+    await client.query("BEGIN");
+
+    try {
+      const restored = await client.query(
+        `INSERT INTO auth."member" (
+           id,
+           "organizationId",
+           "userId",
+           role,
+           "createdAt"
+         )
+         SELECT
+           $1,
+           organization.id,
+           customer.id,
+           'owner',
+           $6
+         FROM auth."organization" AS organization
+         CROSS JOIN auth."user" AS customer
+         WHERE organization.slug = $2
+           AND customer.email = $3
+           AND organization.id = $4
+           AND customer.id = $5
+           AND NOT EXISTS (
+             SELECT 1
+             FROM auth."member" AS existing
+             WHERE existing."organizationId" = organization.id
+               AND existing."userId" = customer.id
+           )`,
+        [
+          membership.id,
+          organizationSlug,
+          email,
+          membership.organizationId,
+          membership.userId,
+          membership.createdAt,
+        ]
+      );
+
+      if (restored.rowCount !== 1) {
+        throw new Error(
+          "Expected exactly one E2E membership restoration."
+        );
+      }
+
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    }
   });
 }

@@ -1,4 +1,5 @@
 import { headers } from "next/headers";
+import { APIError } from "better-auth/api";
 import { auth } from "@/lib/auth";
 
 export async function authorizeProjectCreation() {
@@ -26,9 +27,27 @@ export async function authorizeProjectCreation() {
     };
   }
 
-  const member = await auth.api.getActiveMember({
-    headers: requestHeaders,
-  });
+  let member;
+
+  try {
+    member = await auth.api.getActiveMember({
+      headers: requestHeaders,
+    });
+  } catch (error) {
+    if (
+      error instanceof APIError &&
+      error.statusCode === 400 &&
+      error.body?.code === "MEMBER_NOT_FOUND"
+    ) {
+      return {
+        allowed: false as const,
+        status: 403,
+        error: "Organization access denied",
+      };
+    }
+
+    throw error;
+  }
 
   if (
     !member ||
