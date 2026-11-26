@@ -1,3 +1,4 @@
+import { tryLoadMeteringEnvironment } from "@/lib/environment";
 import { NextResponse } from "next/server";
 import { authorizeProjectCreation } from "@/lib/authorize-project-creation";
 
@@ -67,8 +68,7 @@ export async function GET(
     );
   }
 
-  const apiUrl = process.env.METERING_API_URL;
-  const adminKey = process.env.METERING_ADMIN_API_KEY;
+  const { apiUrl, adminKey } = tryLoadMeteringEnvironment() ?? {};
 
   if (!apiUrl || !adminKey) {
     return NextResponse.json(

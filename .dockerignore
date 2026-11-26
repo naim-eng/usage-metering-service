@@ -33,3 +33,43 @@ src/generated/prisma/
 
 # Exclude local Prisma credentials
 prisma/.env
+
+# Recursive sensitive file exclusions
+**/.env
+**/.env.*
+**/.envrc
+**/.envrc.*
+
+# Credential directories and files
+**/secrets
+**/credentials
+**/credentials.json
+**/service-account.json
+
+# Private keys and certificate containers
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+
+# Database backup artifacts
+**/backups
+**/*.dump
+**/*.sql.gz
+
+# Secret scanning reports
+**/gitleaks-report.json
+**/gitleaks-report-*.json
+**/secret-scan-report.json
+**/secret-scan-report-*.json
+
+# Nested dependencies and generated artifacts
+**/node_modules
+**/coverage
+**/.git
+
+# Frontend is not required by the backend Dockerfile
+web/
+
+# Preserve the public root environment template
+!.env.example

@@ -24,6 +24,7 @@ services:
     command: ["npx", "tsx", "scripts/migrations/run.ts"]
     restart: "no"
     environment:
+      DEPLOYMENT_ENV: local
       DB_HOST: db
       DB_PORT: "5432"
       DB_USER: metering_e2e
@@ -38,6 +39,7 @@ services:
     ports:
       - "127.0.0.1:3003:3000"
     environment:
+      DEPLOYMENT_ENV: local
       DB_HOST: db
       DB_PORT: "5432"
       DB_USER: metering_e2e

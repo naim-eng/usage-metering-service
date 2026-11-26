@@ -46,7 +46,7 @@ The project was developed as a backend engineering capstone and includes automat
 
 | Component | Technology |
 |---|---|
-| Runtime | Node.js 20 (backend), Node.js 22 (frontend CI) |
+| Runtime | Node.js 22 (backend and frontend) |
 | Language | TypeScript |
 | HTTP framework | Express 5 |
 | ORM | Prisma 6.12 |
@@ -791,8 +791,8 @@ The regression test is retained as an automated safeguard. The original intermit
 - Docker Engine or Docker Desktop.
 - Docker Compose.
 - Git.
-- Node.js 20 for backend development.
-- Node.js 22 recommended for frontend development, matching CI.
+- Node.js 22 for backend development.
+- Node.js 22 for frontend development, matching CI.
 - npm.
 
 ### 1. Clone the Repository
@@ -1013,7 +1013,7 @@ Frontend checks include:
 - Next.js type generation and TypeScript validation.
 - Application build verification.
 
-CI uses Node.js 20 for the backend and Node.js 22 for the frontend.
+CI uses Node.js 22 for the backend and frontend.
 
 ### Frontend Validation
 
@@ -1270,6 +1270,108 @@ The service is built around the following assumptions:
 - The current API does not support reversing previously consumed credits.
 
 Each customer project is associated with a metering account.
+
+## Dependency Security and Maintenance
+
+### Runtime Standardization
+
+The backend and frontend use Node.js 22. Local development is pinned
+to Node.js 22.23.5 through the repository's `.nvmrc` file.
+
+Both package manifests declare Node.js 22 compatibility. Docker
+and GitHub Actions use the Node.js 22 release line.
+
+Node.js 20 was replaced because it reached end of life. Future runtime
+upgrades should be completed before the selected release line reaches
+the end of its security support period.
+
+### Dependency Security Assessment
+
+The dependency security assessment completed on November 26, 2026,
+reported the following results:
+
+| Audit | Known vulnerabilities |
+|---|---:|
+| Backend full dependency tree | 0 |
+| Backend production dependencies | 0 |
+| Frontend full dependency tree | 0 |
+| Frontend production dependencies | 0 |
+
+Selected dependency updates included:
+
+- dotenv 18.0.10.
+- Better Auth 1.7.28.
+- Node.js type definitions aligned with Node.js 22.
+- React type definitions updated to 19.3.3.
+
+All four npm security audits completed successfully. These results
+represent the known vulnerabilities reported at the time of assessment
+and do not guarantee the absence of security vulnerabilities.
+
+### Regression Validation
+
+Following the runtime and dependency updates, the complete automated
+regression suite passed:
+
+| Test suite | Passed | Failed |
+|---|---:|---:|
+| Backend unit tests | 95 | 0 |
+| Backend integration tests | 57 | 0 |
+| Frontend end-to-end tests | 63 | 0 |
+| Total | 215 | 0 |
+
+Backend and frontend TypeScript validation, frontend ESLint validation,
+application builds, container readiness, and isolated E2E database
+cleanup verification also passed.
+
+### Known Dependency Maintenance Limitations
+
+**ESLint 9**
+
+The frontend currently retains ESLint 9.39.5, which is no longer
+supported upstream.
+
+An ESLint 10 upgrade was evaluated but encountered dependency
+compatibility conflicts within the existing frontend linting stack.
+
+ESLint 9 is retained temporarily as a development tooling limitation.
+The upgrade should be reassessed when the relevant dependencies
+provide compatible peer dependency declarations.
+
+Dependency compatibility checks must not be bypassed using
+forced installation or legacy peer dependency resolution.
+
+**Optional Sharp-related packages**
+
+Following a clean frontend dependency installation, npm reports
+the following packages as extraneous:
+
+- @emnapi/runtime 1.11.3.
+- @img/sharp-wasm32 0.35.5.
+
+Both packages appear in the lockfile as optional dependencies.
+The exact reason for npm's extraneous classification remains
+unconfirmed.
+
+Neither package was reported as vulnerable by the completed audits.
+They are retained without manual dependency tree modification
+pending further investigation.
+
+### Ongoing Dependency Maintenance
+
+- Review dependency security advisories regularly.
+- Run full and production-only npm audits for both applications.
+- Review runtime support periods before production deployment.
+- Evaluate major dependency upgrades independently.
+- Preserve reproducible installations through committed lockfiles.
+- Run automated regression tests after dependency changes.
+- Reassess documented maintenance limitations before production release.
+
+## Environment Security
+
+See [Environment Security and Secret Management](docs/environment-security.md)
+for deployment configuration, credential requirements, environment
+isolation and secret rotation procedures.
 
 ## Limitations
 

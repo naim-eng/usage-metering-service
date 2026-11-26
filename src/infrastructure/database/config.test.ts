@@ -198,3 +198,116 @@ test("rejects invalid connection pool limits", () => {
         );
     }
 });
+
+
+test("rejects whitespace-only required database settings", () => {
+    for (const key of Object.keys(validEnv)) {
+        for (const value of ["", " ", "\t", "\n"]) {
+            assert.throws(
+                () => loadDatabaseConfig({
+                    ...validEnv,
+                    [key]: value
+                }),
+                new RegExp(key)
+            );
+        }
+    }
+});
+
+test("rejects malformed database host values", () => {
+    for (const host of [
+        " localhost",
+        "localhost ",
+        "database host",
+        "postgresql://localhost",
+        "localhost/path",
+        "localhost?query",
+        "user@localhost",
+        "localhost#fragment",
+        "localhost\\path"
+    ]) {
+        assert.throws(
+            () => loadDatabaseConfig({
+                ...validEnv,
+                DB_HOST: host
+            }),
+            /DB_HOST/
+        );
+    }
+});
+
+test("accepts supported database host formats", () => {
+    for (const host of [
+        "localhost",
+        "db",
+        "127.0.0.1",
+        "database.example.com"
+    ]) {
+        assert.equal(
+            loadDatabaseConfig({
+                ...validEnv,
+                DB_HOST: host
+            }).host,
+            host
+        );
+    }
+});
+
+test("rejects non-decimal database numeric settings", () => {
+    const settings = [
+        ["DB_PORT", "5432"],
+        ["DB_CONNECT_TIMEOUT_MS", "5000"],
+        ["DB_POOL_MAX", "10"]
+    ] as const;
+
+    for (const [key, value] of settings) {
+        for (const invalid of [
+            " " + value,
+            value + " ",
+            "+" + value,
+            value + ".0",
+            value + "e0",
+            "0x" + Number(value).toString(16)
+        ]) {
+            assert.throws(
+                () => loadDatabaseConfig({
+                    ...validEnv,
+                    [key]: invalid
+                })
+            );
+        }
+    }
+});
+
+test("preserves valid database passwords without modification", () => {
+    for (const password of [
+        "p@ss:/?#word",
+        "password with spaces",
+        " password-with-padding "
+    ]) {
+        assert.equal(
+            loadDatabaseConfig({
+                ...validEnv,
+                DB_PASSWORD: password
+            }).password,
+            password
+        );
+    }
+});
+
+test("does not disclose credentials in configuration errors", () => {
+    const password = "synthetic-sensitive-database-password";
+
+    assert.throws(
+        () => loadDatabaseConfig({
+            ...validEnv,
+            DB_PASSWORD: password,
+            DB_PORT: "invalid"
+        }),
+        (error: unknown) => {
+            assert.ok(error instanceof Error);
+            assert.ok(!error.message.includes(password));
+            return true;
+        }
+    );
+});

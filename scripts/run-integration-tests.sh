@@ -8,6 +8,8 @@ cd "$(dirname "$0")/.."
 TEST_PORT=3001
 TEST_DB="usage_metering_test"
 
+export DEPLOYMENT_ENV=local
+
 SERVER_PID=""
 SERVER_LOG=""
 

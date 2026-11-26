@@ -1,3 +1,5 @@
+import { isProductionDeployment, requireProductionSecret } from "../../deployment-config";
+
 
 export type DatabaseSslMode = "disable" | "verify-full";
 
@@ -25,14 +27,28 @@ export function loadDatabaseConfig(
     ] as const;
 
     for (const key of required) {
-        if (!env[key]) {
+        if (!env[key]?.trim()) {
             throw new Error(`Missing database configuration: ${key}`);
         }
     }
 
+    const host = env.DB_HOST!;
+
+    if (
+        host !== host.trim() ||
+        /[\s/\\\\@?#]/.test(host)
+    ) {
+        throw new Error("Invalid DB_HOST configuration");
+    }
+
     const port = Number(env.DB_PORT);
 
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    if (
+        !/^[0-9]+$/.test(env.DB_PORT!) ||
+        !Number.isInteger(port) ||
+        port < 1 ||
+        port > 65535
+    ) {
         throw new Error("Invalid PostgreSQL port");
     }
 
@@ -40,6 +56,7 @@ export function loadDatabaseConfig(
     const connectionTimeoutMs = Number(timeoutValue);
 
     if (
+        !/^[0-9]+$/.test(timeoutValue) ||
         !Number.isSafeInteger(connectionTimeoutMs) ||
         connectionTimeoutMs < 100 ||
         connectionTimeoutMs > 60000
@@ -53,6 +70,7 @@ export function loadDatabaseConfig(
     const poolMax = Number(poolValue);
 
     if (
+        !/^[0-9]+$/.test(poolValue) ||
         !Number.isSafeInteger(poolMax) ||
         poolMax < 1 ||
         poolMax > 100
@@ -68,6 +86,14 @@ export function loadDatabaseConfig(
         throw new Error(
             "DB_SSL_MODE must be disable or verify-full"
         );
+    }
+
+    if (isProductionDeployment(env)) {
+        if (sslMode !== "verify-full") {
+            throw new Error("Production requires DB_SSL_MODE=verify-full");
+        }
+
+        requireProductionSecret(env.DB_PASSWORD!, "DB_PASSWORD");
     }
 
     const sslRootCert = env.DB_SSL_ROOT_CERT;

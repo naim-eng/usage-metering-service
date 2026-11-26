@@ -21,6 +21,7 @@ services:
     command: ["npx", "tsx", "scripts/migrations/run.ts"]
     restart: "no"
     environment:
+      DEPLOYMENT_ENV: local
       DB_HOST: db
       DB_PORT: 5432
       DB_USER: metering
@@ -46,6 +47,7 @@ services:
       retries: 3
       start_period: 15s
     environment:
+      DEPLOYMENT_ENV: local
       DB_HOST: db
       DB_PORT: 5432
       DB_USER: metering
@@ -63,6 +65,7 @@ services:
     stop_grace_period: 75s
     restart: unless-stopped
     environment:
+      DEPLOYMENT_ENV: local
       DB_HOST: db
       DB_PORT: 5432
       DB_USER: metering
@@ -95,6 +98,7 @@ services:
     command: ["npx", "tsx", "scripts/migrations/run.ts"]
     restart: "no"
     environment:
+      DEPLOYMENT_ENV: local
       DB_HOST: demo-db
       DB_PORT: 5432
       DB_USER: metering
@@ -109,6 +113,7 @@ services:
   demo-api:
     build: .
     environment:
+      DEPLOYMENT_ENV: local
       DB_HOST: demo-db
       DB_PORT: 5432
       DB_USER: metering
@@ -136,6 +141,7 @@ services:
     build: .
     command: ["npx", "tsx", "examples/demo-client.ts"]
     environment:
+      DEPLOYMENT_ENV: local
       API_BASE_URL: http://demo-api:3000
       ADMIN_API_KEY: ${ADMIN_API_KEY}
     depends_on:
