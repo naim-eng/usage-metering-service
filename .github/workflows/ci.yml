@@ -113,3 +113,152 @@ jobs:
           BETTER_AUTH_SECRET: ci-only-placeholder-secret-never-use-in-production
           BETTER_AUTH_URL: http://localhost:3002
         run: npm --prefix web run build
+
+  e2e:
+    name: End-to-End Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix web
+
+      - name: Install Chromium and system dependencies
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Start isolated E2E infrastructure
+        run: |
+          docker compose -f compose.e2e.yml up \
+            -d --build --wait --wait-timeout 180
+
+      - name: Verify E2E migration history
+        run: |
+          count=$(docker compose -f compose.e2e.yml exec -T db \
+            psql -U metering_e2e -d usage_metering_e2e -Atqc \
+            "SELECT COUNT(*) FROM public.schema_migrations;")
+          if [ "$count" != "9" ]; then
+            echo "Expected 9 migration records, found: $count"
+            exit 1
+          fi
+          echo "Verified all 9 E2E migration records."
+
+      - name: Verify E2E backend readiness
+        id: e2e_ready
+        run: curl --fail --silent --show-error http://127.0.0.1:3003/ready
+
+      - name: Run Playwright end-to-end tests
+        working-directory: web
+        run: npm run test:e2e -- --fail-on-flaky-tests
+
+      - name: Verify E2E database cleanup
+        if: ${{ !cancelled() && steps.e2e_ready.outcome == 'success' }}
+        run: |
+          docker compose -f compose.e2e.yml exec -T db \
+            psql -v ON_ERROR_STOP=1 \
+            -U metering_e2e -d usage_metering_e2e <<'SQL'
+          DO $$
+          DECLARE
+            table_record RECORD;
+            actual_count BIGINT;
+            expected_count BIGINT;
+            required_table TEXT;
+          BEGIN
+            FOREACH required_table IN ARRAY ARRAY[
+              'auth.account',
+              'auth.invitation',
+              'auth.member',
+              'auth.organization',
+              'auth.session',
+              'auth.user',
+              'auth.verification',
+              'public.accounts',
+              'public.low_credit_notifications',
+              'public.monthly_usage',
+              'public.outbox_events',
+              'public.plan_limit_history',
+              'public.plans',
+              'public.project_api_keys',
+              'public.projects',
+              'public.schema_migrations',
+              'public.usage_requests',
+              'public.users'
+            ]
+            LOOP
+              IF NOT EXISTS (
+                SELECT 1
+                FROM pg_tables
+                WHERE schemaname || '.' || tablename = required_table
+              ) THEN
+                RAISE EXCEPTION 'Missing required table: %',
+                  required_table;
+              END IF;
+            END LOOP;
+
+            RAISE NOTICE 'All 18 required database tables exist';
+
+            FOR table_record IN
+              SELECT schemaname, tablename
+              FROM pg_tables
+              WHERE schemaname IN ('public', 'auth')
+              ORDER BY schemaname, tablename
+            LOOP
+              EXECUTE format(
+                'SELECT COUNT(*) FROM %I.%I',
+                table_record.schemaname,
+                table_record.tablename
+              ) INTO actual_count;
+
+              expected_count := CASE
+                WHEN table_record.schemaname = 'public'
+                  AND table_record.tablename = 'plans' THEN 4
+                WHEN table_record.schemaname = 'public'
+                  AND table_record.tablename = 'schema_migrations' THEN 9
+                ELSE 0
+              END;
+
+              RAISE NOTICE '%.%: % rows (expected %)',
+                table_record.schemaname,
+                table_record.tablename,
+                actual_count,
+                expected_count;
+
+              IF actual_count <> expected_count THEN
+                RAISE EXCEPTION 'Unexpected row count in %.%',
+                  table_record.schemaname,
+                  table_record.tablename;
+              END IF;
+            END LOOP;
+          END
+          $$;
+          SQL
+
+      - name: Collect E2E failure diagnostics
+        if: failure()
+        continue-on-error: true
+        run: |
+          echo "=== E2E container status ==="
+          docker compose -f compose.e2e.yml ps -a || true
+
+          echo "=== E2E migration logs ==="
+          docker compose -f compose.e2e.yml logs --no-color --tail=100 migrate || true
+
+          echo "=== E2E PostgreSQL logs ==="
+          docker compose -f compose.e2e.yml logs --no-color --tail=100 db || true
+
+          echo "=== E2E backend logs ==="
+          docker compose -f compose.e2e.yml logs --no-color --tail=100 api || true
+
+      - name: Stop isolated E2E infrastructure
+        if: always()
+        run: docker compose -f compose.e2e.yml down --volumes --remove-orphans
