@@ -192,6 +192,8 @@ test("expired server-side sessions cannot authenticate or renew", async ({
 
     expect(body.session.id).toBeTruthy();
 
+    const expiredCookie = await sessionCookie(client);
+
     const expired = await database.query(
       `UPDATE auth.session
        SET "expiresAt" = NOW() - INTERVAL '1 hour'
@@ -209,7 +211,11 @@ test("expired server-side sessions cannot authenticate or renew", async ({
     expect(rejected.status()).toBe(200);
     expect(await rejected.json()).toBeNull();
 
-    const repeated = await client.get("/api/auth/get-session");
+    const repeated = await client.get("/api/auth/get-session", {
+      headers: {
+        cookie: `${expiredCookie.name}=${expiredCookie.value}`,
+      },
+    });
 
     expect(repeated.status()).toBe(200);
     expect(await repeated.json()).toBeNull();
@@ -362,6 +368,8 @@ test("stale sessions cannot perform sensitive password changes", async ({
 
     const body = await active.json();
 
+    const originalCookie = await sessionCookie(client);
+
     const aged = await database.query(
       `UPDATE auth.session
        SET "createdAt" = NOW() - INTERVAL '20 minutes',
@@ -378,7 +386,27 @@ test("stale sessions cannot perform sensitive password changes", async ({
     const ordinary = await client.get("/api/auth/get-session");
 
     expect(ordinary.status()).toBe(200);
-    expect((await ordinary.json()).user.email).toBe(account.email);
+    const ordinaryBody = await ordinary.json();
+
+    expect(ordinaryBody.user.email).toBe(account.email);
+    expect(ordinaryBody.session.expiresAt).toBe(body.session.expiresAt);
+    expect((await sessionCookie(client)).expires).toBe(
+      originalCookie.expires
+    );
+
+    const persisted = await database.query(
+      `SELECT "expiresAt" FROM auth.session
+       WHERE id = $1
+         AND "userId" = (
+           SELECT id FROM auth."user" WHERE email = $2
+         )`,
+      [body.session.id, account.email]
+    );
+
+    expect(persisted.rowCount).toBe(1);
+    expect(new Date(persisted.rows[0].expiresAt).getTime()).toBe(
+      Date.parse(body.session.expiresAt)
+    );
 
     const rejected = await client.post(
       "/api/auth/change-password",

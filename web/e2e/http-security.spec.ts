@@ -36,7 +36,14 @@ test("backend enforces HTTP security and cache protection", async ({
   expect(headers["referrer-policy"]).toBe("no-referrer");
   expect(headers["cache-control"]).toContain("no-store");
   expect(headers["permissions-policy"]).toContain("camera=()");
-  expect(headers["content-security-policy"]).toBeTruthy();
+  expect(headers["x-frame-options"]).toBe("DENY");
+  expect(headers["strict-transport-security"]).toBeUndefined();
+  expect(headers["content-security-policy"]).toContain(
+    "frame-ancestors 'none'"
+  );
+  expect(headers["content-security-policy"]).not.toContain(
+    "upgrade-insecure-requests"
+  );
   expect(headers["x-powered-by"]).toBeUndefined();
 });
 

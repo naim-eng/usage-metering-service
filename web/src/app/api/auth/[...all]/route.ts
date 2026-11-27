@@ -2,7 +2,7 @@ import { isProductionDeployment } from "@/lib/deployment-config";
 import { hasValidTrustedClientIp } from "@/lib/trusted-client-ip";
 import { NextResponse } from "next/server";
 import {
-  readLimitedJson,
+  readAuthenticationJson,
   RequestJsonError,
 } from "@/lib/request-json";
 import { auth } from "@/lib/auth";
@@ -11,6 +11,11 @@ import { toNextJsHandler } from "better-auth/next-js";
 const handlers = toNextJsHandler(auth);
 
 function preventCaching(response: Response): Response {
+  if (response.status >= 500) {
+    void response.body?.cancel().catch(() => {});
+    return authenticationFailure(response.status);
+  }
+
   const headers = new Headers(response.headers);
 
   headers.set("Cache-Control", "no-store");
@@ -41,13 +46,13 @@ function validateProductionIngress(
   return null;
 }
 
-function authenticationFailure(): Response {
+function authenticationFailure(status = 500): Response {
   console.error("Authentication request failed");
 
   return NextResponse.json(
     { error: "Authentication service unavailable" },
     {
-      status: 500,
+      status,
       headers: { "Cache-Control": "no-store" },
     }
   );
@@ -77,27 +82,18 @@ export async function POST(request: Request) {
   }
 
   try {
-    const contentLength = request.headers.get("content-length");
-    const transferEncoding = request.headers.get("transfer-encoding");
+    const body = await readAuthenticationJson(request);
+    const headers = new Headers(request.headers);
 
-    const hasBody =
-      request.body !== null &&
-      (contentLength !== "0" || transferEncoding !== null);
+    headers.delete("content-length");
+    headers.delete("transfer-encoding");
 
-    if (hasBody) {
-      const body = await readLimitedJson(request);
-      const headers = new Headers(request.headers);
-
-      headers.delete("content-length");
-      headers.delete("transfer-encoding");
-
-      request = new Request(request.url, {
-        method: request.method,
-        headers,
-        body: JSON.stringify(body),
-        signal: request.signal,
-      });
-    }
+    request = new Request(request.url, {
+      method: request.method,
+      headers,
+      body,
+      signal: request.signal,
+    });
   } catch (error) {
     if (error instanceof RequestJsonError) {
       return NextResponse.json(

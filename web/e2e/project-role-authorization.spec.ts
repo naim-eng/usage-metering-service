@@ -284,6 +284,7 @@ test("enforces project API permissions for owners, admins and members", async ({
       const promotion = await page.request.post(
         "/api/auth/organization/update-member-role",
         {
+          headers: { Origin: new URL(page.url()).origin },
           data: {
             memberId: membership.id,
             organizationId: record.organizationId,
@@ -294,6 +295,8 @@ test("enforces project API permissions for owners, admins and members", async ({
       );
 
       expect([400, 403]).toContain(promotion.status());
+      const promotionError = await promotion.json();
+      expect(JSON.stringify(promotionError)).not.toMatch(/origin|csrf/i);
 
       const unchanged = await page.request.get(
         "/api/auth/organization/get-active-member"
@@ -306,6 +309,7 @@ test("enforces project API permissions for owners, admins and members", async ({
     const organizationUpdate = await page.request.post(
       "/api/auth/organization/update",
       {
+        headers: { Origin: new URL(page.url()).origin },
         data: {
           organizationId: record.organizationId,
           data: {
@@ -317,10 +321,13 @@ test("enforces project API permissions for owners, admins and members", async ({
     );
 
     expect(organizationUpdate.status()).toBe(403);
+    const organizationUpdateError = await organizationUpdate.json();
+    expect(JSON.stringify(organizationUpdateError)).not.toMatch(/origin|csrf/i);
 
     const invitation = await page.request.post(
       "/api/auth/organization/invite-member",
       {
+        headers: { Origin: new URL(page.url()).origin },
         data: {
           email: account.email,
           organizationId: record.organizationId,
@@ -331,10 +338,13 @@ test("enforces project API permissions for owners, admins and members", async ({
     );
 
     expect(invitation.status()).toBe(403);
+    const invitationError = await invitation.json();
+    expect(JSON.stringify(invitationError)).not.toMatch(/origin|csrf/i);
 
     const removal = await page.request.post(
       "/api/auth/organization/remove-member",
       {
+        headers: { Origin: new URL(page.url()).origin },
         data: {
           memberIdOrEmail: membership.id,
           organizationId: record.organizationId,
@@ -343,7 +353,11 @@ test("enforces project API permissions for owners, admins and members", async ({
       }
     );
 
-    expect(removal.status()).toBe(403);
+    expect(removal.status()).toBe(401);
+    const removalError = await removal.json();
+    expect(removalError.code).toBe(
+      "YOU_ARE_NOT_ALLOWED_TO_DELETE_THIS_MEMBER"
+    );
 
     const finalMembership = await page.request.get(
       "/api/auth/organization/get-active-member"

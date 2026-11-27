@@ -17,7 +17,7 @@ test("persistent authentication rate limits enforce concurrent requests across i
   const origin = "http://localhost:3004";
   const basePath = `/api/rate-limit-test-${randomUUID()}`;
 
-  let verifiedDatabase = false;
+  let ownsTestBucket = false;
 
   function createAuth() {
     return betterAuth({
@@ -58,7 +58,6 @@ test("persistent authentication rate limits enforce concurrent requests across i
       username: "metering_e2e",
     });
 
-    verifiedDatabase = true;
 
     // Use a dedicated test endpoint bucket and require it to be empty.
     const existing = await pool.query(
@@ -67,6 +66,7 @@ test("persistent authentication rate limits enforce concurrent requests across i
     );
 
     expect(existing.rowCount).toBe(0);
+    ownsTestBucket = true;
 
     const first = createAuth();
     const second = createAuth();
@@ -133,7 +133,7 @@ test("persistent authentication rate limits enforce concurrent requests across i
     ).toBe(200);
 
   } finally {
-    if (verifiedDatabase) {
+    if (ownsTestBucket) {
       await pool.query(
         `DELETE FROM auth."rateLimit"
          WHERE "key" LIKE '%|/ok'`
