@@ -3,6 +3,10 @@
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
 import { authClient } from "@/lib/auth-client";
+import {
+  MIN_PASSWORD_LENGTH,
+  validateNewPassword,
+} from "@/lib/password-policy";
 
 export default function SignUpPage() {
   const [name, setName] = useState("");
@@ -29,8 +33,10 @@ export default function SignUpPage() {
       return;
     }
 
-    if (password.length < 8) {
-      setError("Password must contain at least 8 characters.");
+    const passwordError = validateNewPassword(password);
+
+    if (passwordError) {
+      setError(passwordError);
       return;
     }
 
@@ -46,10 +52,20 @@ export default function SignUpPage() {
         name: name.trim(),
         email: email.trim(),
         password,
+        callbackURL: "/forgot-password",
       });
 
       if (result.error) {
-        setError(result.error.message || "Unable to create account.");
+        switch (result.error.code) {
+          case "PASSWORD_COMPROMISED":
+            setError("This password has appeared in a known data breach. Please choose a different password.");
+            break;
+          case "PASSWORD_SCREENING_UNAVAILABLE":
+            setError("Password security verification is temporarily unavailable. Please try again later.");
+            break;
+          default:
+            setError("Unable to complete registration. Please try again.");
+        }
         return;
       }
 
@@ -81,17 +97,17 @@ export default function SignUpPage() {
           {success ? (
             <div className="text-center">
               <h1 className="text-2xl font-bold text-slate-900">
-                Account created
+                Registration submitted
               </h1>
               <p className="mt-3 text-slate-600">
-                Your customer account has been registered successfully.
+                If registration is successful, you will receive an email with a verification link. After verifying your email, use Forgot password to establish your final password before signing in.
               </p>
               <button
                 type="button"
-                onClick={() => window.location.replace("/")}
+                onClick={() => window.location.replace("/sign-in")}
                 className="mt-7 inline-block rounded-xl bg-violet-600 px-6 py-3 font-semibold text-white hover:bg-violet-700"
               >
-                Continue to dashboard
+                Continue to sign in
               </button>
             </div>
           ) : (
@@ -135,12 +151,12 @@ export default function SignUpPage() {
                   <input
                     required
                     type="password"
-                    minLength={8}
+                    minLength={MIN_PASSWORD_LENGTH}
                     autoComplete="new-password"
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
                     className={inputClass}
-                    placeholder="At least 8 characters"
+                    placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
                   />
                 </label>
 
@@ -149,7 +165,7 @@ export default function SignUpPage() {
                   <input
                     required
                     type="password"
-                    minLength={8}
+                    minLength={MIN_PASSWORD_LENGTH}
                     autoComplete="new-password"
                     value={confirmPassword}
                     onChange={(event) => setConfirmPassword(event.target.value)}

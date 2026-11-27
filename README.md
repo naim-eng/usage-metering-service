@@ -1425,3 +1425,5 @@ The platform is configured for local development and validation.
 Further frontend review, end-to-end system testing, security review,
 and backup and restoration verification remain part of the
 local development roadmap.
+
+- [Customer authentication security](docs/authentication-security.md)

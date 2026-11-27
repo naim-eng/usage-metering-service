@@ -13,6 +13,7 @@
     "better-auth": "^1.7.28",
     "kysely": "^0.28.20",
     "next": "16.4.6",
+    "nodemailer": "^10.6.1",
     "pg": "^8.23.1",
     "react": "19.3.0",
     "react-dom": "19.3.0"
@@ -21,6 +22,7 @@
     "@playwright/test": "^1.65.1",
     "@tailwindcss/turbopack": "4.3.3",
     "@types/node": "^22.20.7",
+    "@types/nodemailer": "^8.0.2",
     "@types/pg": "^8.23.1",
     "@types/react": "^19.3.3",
     "@types/react-dom": "^19",

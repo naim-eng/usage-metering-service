@@ -3,6 +3,7 @@ import { after, test } from "node:test";
 import type { Server } from "node:http";
 import express from "express";
 import helmet from "helmet";
+import { configureTrustedProxy } from "./proxy-config.js";
 import { rateLimit } from "express-rate-limit";
 import {
     createConsumptionLimiter,
@@ -237,3 +238,168 @@ async function requestPost(server: Server): Promise<Response> {
         method: "POST"
     });
 }
+
+
+async function createProxyLimitedServer(
+    trustedProxy: string
+): Promise<Server> {
+    const app = express();
+
+    configureTrustedProxy(app, trustedProxy);
+
+    app.get("/health", (_req, res) => {
+        res.json({ status: "ok" });
+    });
+
+    app.post(
+        "/consume",
+        createConsumptionPreAuthLimiter(2),
+        (_req, res) => {
+            res.json({ status: "ok" });
+        }
+    );
+
+    const server = app.listen(0, "127.0.0.1");
+
+    await new Promise<void>((resolve, reject) => {
+        if (server.listening) {
+            resolve();
+            return;
+        }
+
+        server.once("listening", resolve);
+        server.once("error", reject);
+    });
+
+    return server;
+}
+
+async function requestWithForwardedIP(
+    server: Server,
+    forwardedIP: string
+): Promise<Response> {
+    const address = server.address();
+
+    assert.ok(address && typeof address !== "string");
+
+    return fetch(
+        `http://127.0.0.1:${address.port}/consume`,
+        {
+            method: "POST",
+            headers: {
+                "X-Forwarded-For": forwardedIP,
+                "X-Real-IP": forwardedIP
+            }
+        }
+    );
+}
+
+test("untrusted forwarded IP rotation cannot bypass rate limits", async () => {
+    const server = await createProxyLimitedServer("false");
+
+    try {
+        assert.equal(
+            (await requestWithForwardedIP(server, "192.0.2.1")).status,
+            200
+        );
+
+        assert.equal(
+            (await requestWithForwardedIP(server, "192.0.2.2")).status,
+            200
+        );
+
+        assert.equal(
+            (await requestWithForwardedIP(server, "192.0.2.3")).status,
+            429
+        );
+    } finally {
+        await closeServer(server);
+    }
+});
+
+test("trusted proxy client IPs receive independent rate limits", async () => {
+    const server = await createProxyLimitedServer("127.0.0.1");
+
+    try {
+        for (const ip of ["192.0.2.10", "192.0.2.20"]) {
+            assert.equal(
+                (await requestWithForwardedIP(server, ip)).status,
+                200
+            );
+
+            assert.equal(
+                (await requestWithForwardedIP(server, ip)).status,
+                200
+            );
+
+            assert.equal(
+                (await requestWithForwardedIP(server, ip)).status,
+                429
+            );
+        }
+    } finally {
+        await closeServer(server);
+    }
+});
+
+test("spoofed leftmost forwarded IP cannot bypass trusted proxy limits", async () => {
+    const server = await createProxyLimitedServer("127.0.0.1");
+
+    try {
+        for (let index = 1; index <= 3; index++) {
+            const response = await requestWithForwardedIP(
+                server,
+                `198.51.100.${index}, 203.0.113.10`
+            );
+
+            assert.equal(response.status, index <= 2 ? 200 : 429);
+        }
+    } finally {
+        await closeServer(server);
+    }
+});
+
+test("IPv6 address rotation within a subnet cannot bypass rate limits", async () => {
+    const server = await createProxyLimitedServer("127.0.0.1");
+
+    try {
+        assert.equal(
+            (await requestWithForwardedIP(server, "2001:db8:1::1")).status,
+            200
+        );
+
+        assert.equal(
+            (await requestWithForwardedIP(server, "2001:db8:1::2")).status,
+            200
+        );
+
+        assert.equal(
+            (await requestWithForwardedIP(server, "2001:db8:1::3")).status,
+            429
+        );
+
+        assert.equal(
+            (await requestWithForwardedIP(server, "2001:db8:2::1")).status,
+            200
+        );
+    } finally {
+        await closeServer(server);
+    }
+});
+
+test("health endpoint remains accessible after rate limit exhaustion", async () => {
+    const server = createLimitedServer(2);
+
+    try {
+        assert.equal((await request(server, "/limited")).status, 200);
+        assert.equal((await request(server, "/limited")).status, 200);
+        assert.equal((await request(server, "/limited")).status, 429);
+
+        const health = await request(server, "/health");
+
+        assert.equal(health.status, 200);
+        assert.deepEqual(await health.json(), { status: "ok" });
+    } finally {
+        await closeServer(server);
+    }
+});

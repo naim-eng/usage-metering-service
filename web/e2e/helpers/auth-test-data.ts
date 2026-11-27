@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
+import { cleanupTestEmails } from "./auth-email";
 
 const E2E_DATABASE_URL =
   "postgresql://metering_e2e:e2e_local_password_not_for_production@127.0.0.1:5434/usage_metering_e2e";
@@ -89,7 +90,7 @@ export async function cleanupTestAccount(
 ): Promise<number> {
   assertTestEmail(email);
 
-  return withE2EDatabase(async (client) => {
+  const deletedCount = await withE2EDatabase(async (client) => {
     const result = await client.query(
       `DELETE FROM auth."user"
        WHERE email = $1`,
@@ -98,6 +99,10 @@ export async function cleanupTestAccount(
 
     return result.rowCount ?? 0;
   });
+
+  await cleanupTestEmails(email);
+
+  return deletedCount;
 }
 
 export type TestOrganization = {
@@ -707,6 +712,81 @@ export async function restoreTestOrganizationMembership(
       if (restored.rowCount !== 1) {
         throw new Error(
           "Expected exactly one E2E membership restoration."
+        );
+      }
+
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    }
+  });
+}
+
+export async function readTestPasswordHash(
+  email: string
+): Promise<string> {
+  assertTestEmail(email);
+
+  return withE2EDatabase(async (client) => {
+    const result = await client.query<{
+      password: string | null;
+    }>(
+      `SELECT account.password
+       FROM auth."account" AS account
+       JOIN auth."user" AS customer
+         ON customer.id = account."userId"
+       WHERE customer.email = $1
+         AND account."providerId" = 'credential'`,
+      [email]
+    );
+
+    if (
+      result.rows.length !== 1 ||
+      typeof result.rows[0].password !== "string" ||
+      result.rows[0].password.length === 0
+    ) {
+      throw new Error(
+        "Expected exactly one E2E password credential."
+      );
+    }
+
+    return result.rows[0].password;
+  });
+}
+
+export async function replaceTestPasswordWithLegacyHash(
+  email: string,
+  legacyHash: string
+): Promise<void> {
+  assertTestEmail(email);
+
+  if (
+    legacyHash.length !== 161 ||
+    !/^[0-9a-f]{32}:[0-9a-f]{128}$/.test(legacyHash)
+  ) {
+    throw new Error("Invalid legacy E2E password hash.");
+  }
+
+  await withE2EDatabase(async (client) => {
+    await client.query("BEGIN");
+
+    try {
+      const result = await client.query(
+        `UPDATE auth."account" AS account
+         SET password = $2,
+             "updatedAt" = CURRENT_TIMESTAMP
+         FROM auth."user" AS customer
+         WHERE account."userId" = customer.id
+           AND account."accountId" = customer.id
+           AND customer.email = $1
+           AND account."providerId" = 'credential'`,
+        [email, legacyHash]
+      );
+
+      if (result.rowCount !== 1) {
+        throw new Error(
+          "Expected exactly one E2E credential update."
         );
       }
 

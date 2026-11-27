@@ -33,7 +33,11 @@ export default function SignInPage() {
       });
 
       if (result.error) {
-        setError("Invalid email or password. Please try again.");
+        setError(
+          result.error.code === "EMAIL_NOT_VERIFIED"
+            ? "Verify your email address before signing in."
+            : "Invalid email or password. Please try again."
+        );
         return;
       }
 
@@ -114,6 +118,21 @@ export default function SignInPage() {
               {loading ? "Signing in..." : "Sign in"}
             </button>
           </form>
+
+          <div className="mt-4 flex flex-col gap-2 text-sm">
+            <Link
+              href="/forgot-password"
+              className="text-slate-700 underline"
+            >
+              Forgot your password?
+            </Link>
+            <Link
+              href="/resend-verification"
+              className="text-slate-700 underline"
+            >
+              Resend verification email
+            </Link>
+          </div>
 
           <p className="mt-7 text-center text-sm text-slate-600">
             Don&apos;t have an account?{" "}

@@ -1,3 +1,4 @@
+import { MIN_PASSWORD_LENGTH, MAX_PASSWORD_LENGTH } from "../src/lib/password-policy";
 import { test, expect } from "@playwright/test";
 import {
   createTestAccount,
@@ -15,7 +16,10 @@ test("generates unique synthetic test accounts", () => {
 
   expect(second.email).not.toBe(first.email);
   expect(second.password).not.toBe(first.password);
-  expect(first.password.length).toBeGreaterThanOrEqual(8);
+  expect(first.password.length)
+    .toBeGreaterThanOrEqual(MIN_PASSWORD_LENGTH);
+  expect(first.password.length)
+    .toBeLessThanOrEqual(MAX_PASSWORD_LENGTH);
   expect(first.name).toBe("E2E Authentication Tester");
 });
 

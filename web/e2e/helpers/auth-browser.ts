@@ -1,3 +1,4 @@
+import { verifyTestAccountEmail, establishTestAccountPassword } from "./auth-email";
 import { expect, type Page } from "@playwright/test";
 import type { TestAccount } from "./auth-test-data";
 
@@ -33,10 +34,16 @@ export async function registerTestAccount(
 
   await expect(
     page.getByRole("heading", {
-      name: "Account created",
+      name: "Registration submitted",
       exact: true,
     })
   ).toBeVisible();
+
+  await verifyTestAccountEmail(page.request, account.email);
+  await establishTestAccountPassword(page.request, account.email, account.password);
+
+  await submitSignIn(page, account.email, account.password);
+  await expect(page).toHaveURL(/\/create-organization$/);
 }
 
 export async function submitSignIn(

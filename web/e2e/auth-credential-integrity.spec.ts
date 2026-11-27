@@ -68,11 +68,19 @@ test("preserves original credentials after duplicate registration", async ({
 
     const response = await responsePromise;
 
-    expect(response.status())
-      .toBeGreaterThanOrEqual(400);
+    expect(response.status()).toBe(200);
+    expect((await response.json()).token).toBeNull();
 
-    expect(response.status())
-      .toBeLessThan(500);
+    await expect(
+      duplicatePage.getByRole("heading", {
+        name: "Registration submitted",
+        exact: true,
+      })
+    ).toBeVisible();
+
+    expect(
+      (await duplicatePage.request.get("/api/projects")).status()
+    ).toBe(401);
 
     expect(
       await countTestAccounts(account.email)

@@ -30,6 +30,13 @@ export default defineConfig({
       NEXT_BUILD_DIR: ".next-e2e",
       DEPLOYMENT_ENV: "local",
       E2E_AUTH_RATE_LIMIT: "1",
+      SMTP_HOST: "127.0.0.1",
+      SMTP_PORT: "1026",
+      SMTP_SECURE: "false",
+      SMTP_FROM: "no-reply@example.test",
+      SMTP_USER: "",
+      SMTP_PASSWORD: "",
+
       AUTH_DATABASE_URL:
         "postgresql://metering_e2e:e2e_local_password_not_for_production@127.0.0.1:5434/usage_metering_e2e",
       BETTER_AUTH_SECRET:
