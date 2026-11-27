@@ -34,7 +34,7 @@ enforcing quotas, managing credits and monitoring consumption.
 | [Installation guide](docs/installation.md) | Local setup and configuration |
 | [Database guide](docs/database.md) | Database schema and migrations |
 | [System architecture](docs/architecture.md) | System design and technical decisions |
-| [Technical reference](docs/technical-reference.md) | Detailed implementation reference |
+| [Technical reference](docs/technical-reference.md) | Detailed implementation and historical reference |
 | [Customer API guide](docs/customer-api-guide.md) | API integration instructions |
 | [Frontend guide](web/README.md) | Dashboard development |
 | [Authentication security](docs/authentication-security.md) | Security and access controls |

@@ -1,5 +1,26 @@
 # Usage Metering Technical Reference
 
+## Documentation Scope
+
+This document preserves detailed implementation explanations
+from the original project documentation.
+
+For current setup, security and operational instructions,
+use the dedicated guides:
+
+- [Installation](installation.md)
+- [Architecture](architecture.md)
+- [Database](database.md)
+- [Customer API](customer-api-guide.md)
+- [Customer dashboard](customer-user-guide.md)
+- [Developer guide](developer-guide.md)
+- [Operations](operations-guide.md)
+- [Security regression](security-regression-summary.md)
+
+Historical implementation details and performance results
+must not be interpreted as current production guarantees.
+
+
 A full-stack usage metering and quota management platform for tracking resource consumption and enforcing configurable account and user quotas through customer projects.
 
 Built with **TypeScript, Node.js, Express 5, Prisma ORM, and PostgreSQL 17**, the service demonstrates transactional quota enforcement, account isolation, idempotency, concurrent request handling, custom plan management, historical reporting, and a DDD-inspired Clean Architecture.
@@ -1424,7 +1445,12 @@ Current development takes place on the feature/saas-platform branch.
 The platform is configured for local development and validation.
 
 Security hardening and end-to-end regression testing are complete.
-Documentation, deployment preparation, backup and restoration
-verification, and final release validation remain outstanding.
+Dedicated customer, developer, security and operational
+documentation has been prepared.
+
+Deployment preparation, backup and restoration verification,
+and final release validation remain outstanding.
+
+The platform has not been publicly deployed.
 
 - [Customer authentication security](authentication-security.md)
