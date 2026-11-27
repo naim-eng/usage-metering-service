@@ -83,7 +83,7 @@ test(
                 created.project.meteringAccountId
             );
 
-            const legacyKey = created.apiKey;
+            const originalKey = created.apiKey;
 
             const productionKey = await apiKeysService.create(
                 organizationId,
@@ -111,11 +111,11 @@ test(
             assert.equal(productionResponse.status, 200);
             assert.equal(developmentResponse.status, 200);
 
-            // The original account key must remain valid.
-            const legacyResponse =
-                await authenticatedRequest(legacyKey);
+            // The initial managed project key must authenticate.
+            const originalResponse =
+                await authenticatedRequest(originalKey);
 
-            assert.equal(legacyResponse.status, 200);
+            assert.equal(originalResponse.status, 200);
 
             // Revoke only the production key.
             await apiKeysService.revoke(
@@ -145,7 +145,7 @@ test(
 
             assert.equal(
                 (await authenticatedRequest(
-                    legacyKey
+                    originalKey
                 )).status,
                 200
             );
@@ -167,14 +167,71 @@ test(
                 "Invalid API key"
             );
 
-            // Legacy account keys remain independent of
-            // project status for backward compatibility.
+            // Initial managed project keys must also be denied.
+            const inactiveOriginalResponse =
+                await authenticatedRequest(originalKey);
+
+            assert.equal(inactiveOriginalResponse.status, 401);
+            assert.equal(
+                inactiveOriginalResponse.data.error,
+                "Invalid API key"
+            );
+
+            // Reactivation restores valid credentials only.
+            await prisma.projects.update({
+                where: { id: projectId },
+                data: { status: "active" }
+            });
+
+            assert.equal(
+                (await authenticatedRequest(originalKey)).status,
+                200
+            );
+
             assert.equal(
                 (await authenticatedRequest(
-                    legacyKey
+                    developmentKey.apiKey
                 )).status,
                 200
             );
+
+            assert.equal(
+                (await authenticatedRequest(
+                    productionKey.apiKey
+                )).status,
+                401
+            );
+            // Revocation must also apply to the original key.
+            const originalRecord =
+                await prisma.project_api_keys.findFirstOrThrow({
+                    where: {
+                        project_id: projectId,
+                        name: "Original project key"
+                    }
+                });
+
+            await apiKeysService.revoke(
+                organizationId,
+                projectId,
+                originalRecord.id
+            );
+
+            const revokedOriginal =
+                await authenticatedRequest(originalKey);
+
+            assert.equal(revokedOriginal.status, 401);
+            assert.equal(
+                revokedOriginal.data.error,
+                "Invalid API key"
+            );
+
+            assert.equal(
+                (await authenticatedRequest(
+                    developmentKey.apiKey
+                )).status,
+                200
+            );
+
         } finally {
             if (projectId) {
                 await prisma.project_api_keys.deleteMany({

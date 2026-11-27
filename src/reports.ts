@@ -21,7 +21,7 @@ reportsRouter.get(
 
         if (
             typeof month !== "string" ||
-            !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)
+            !/^(?!0000)\d{4}-(0[1-9]|1[0-2])$/.test(month)
         ) {
             res.status(400).json({
                 error: "Month must be in YYYY-MM format"

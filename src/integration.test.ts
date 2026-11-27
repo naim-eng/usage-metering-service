@@ -123,7 +123,7 @@ test("Rejects consumption without an API key", async () => {
     });
 
     assert.equal(result.status, 401);
-    assert.equal(result.data.error, "Missing or invalid API key");
+    assert.equal(result.data.error, "Invalid API key");
 });
 
 // ------------------------------------------------------------
@@ -1961,6 +1961,15 @@ test("Project API provisions an account and quota history", async () => {
         assert.equal(String(records.rows[0].monthly_limit), "100");
         assert.equal(String(records.rows[0].max_per_request), "20");
     } finally {
+        await pool.query(
+            `DELETE FROM project_api_keys
+             WHERE project_id IN (
+                 SELECT id FROM projects
+                 WHERE organization_id = $1
+             )`,
+            [organizationId]
+        );
+
         const deleted = await pool.query(
             `DELETE FROM projects
              WHERE organization_id = $1
@@ -2023,6 +2032,15 @@ async function createProjectForTest(organizationId: string, name: string) {
 }
 
 async function cleanupProjectTestOrganization(organizationId: string) {
+    await pool.query(
+        `DELETE FROM project_api_keys
+         WHERE project_id IN (
+             SELECT id FROM projects
+             WHERE organization_id = $1
+         )`,
+        [organizationId]
+    );
+
     const deleted = await pool.query(
         `DELETE FROM projects
          WHERE organization_id = $1
@@ -2431,6 +2449,174 @@ test("Project dashboard rejects projects without a metering account", async () =
             result.data.error,
             "Project metering account is not available"
         );
+    } finally {
+        await cleanupProjectTestOrganization(organizationId);
+    }
+});
+
+test("Standalone account API key rotation requires administrative authentication and invalidates the old key", async () => {
+    const name = `Rotation Test ${randomUUID()}`;
+    let accountId: string | undefined;
+
+    try {
+        const created = await post(
+            "/accounts",
+            { name, planId: 1 },
+            { "X-Admin-Key": getAdminKey() }
+        );
+
+        assert.equal(created.status, 201);
+
+        accountId = String(created.data.account.id);
+
+        const originalKey = created.data.apiKey;
+        const endpoint =
+            `/accounts/${accountId}/api-key/rotate`;
+
+        const inspect = async (key: string) => {
+            return fetch("http://localhost:3001/account", {
+                headers: { "X-API-Key": key }
+            });
+        };
+
+        assert.equal((await inspect(originalKey)).status, 200);
+
+        const unauthorized = await post(endpoint, {});
+        assert.equal(unauthorized.status, 401);
+
+        const wrongAdmin = await post(
+            endpoint,
+            {},
+            { "X-Admin-Key": "invalid-admin-key" }
+        );
+
+        assert.equal(wrongAdmin.status, 401);
+        assert.equal((await inspect(originalKey)).status, 200);
+
+        const before = await pool.query(
+            `SELECT id, name, plan_id, created_at
+             FROM accounts WHERE id = $1`,
+            [accountId]
+        );
+
+        const rotated = await post(
+            endpoint,
+            {},
+            { "X-Admin-Key": getAdminKey() }
+        );
+
+        assert.equal(rotated.status, 200);
+        assert.equal(rotated.data.accountId, accountId);
+        assert.match(rotated.data.apiKey, /^um_[0-9a-f]{64}$/);
+        assert.notEqual(rotated.data.apiKey, originalKey);
+
+        const rejected = await inspect(originalKey);
+        assert.equal(rejected.status, 401);
+        assert.deepEqual(await rejected.json(), {
+            error: "Invalid API key"
+        });
+
+        assert.equal(
+            (await inspect(rotated.data.apiKey)).status,
+            200
+        );
+
+        const after = await pool.query(
+            `SELECT id, name, plan_id, created_at
+             FROM accounts WHERE id = $1`,
+            [accountId]
+        );
+
+        assert.deepEqual(after.rows, before.rows);
+
+        const repeated = await post(
+            endpoint,
+            {},
+            { "X-Admin-Key": getAdminKey() }
+        );
+
+        assert.equal(repeated.status, 200);
+
+        assert.equal(
+            (await inspect(rotated.data.apiKey)).status,
+            401
+        );
+
+        assert.equal(
+            (await inspect(repeated.data.apiKey)).status,
+            200
+        );
+
+    } finally {
+        if (accountId !== undefined) {
+            await pool.query(
+                "DELETE FROM plan_limit_history WHERE account_id = $1",
+                [accountId]
+            );
+
+            await pool.query(
+                "DELETE FROM accounts WHERE id = $1",
+                [accountId]
+            );
+        }
+    }
+});
+
+test("Standalone account rotation rejects project-linked accounts and invalid account IDs", async () => {
+    const organizationId =
+        await createProjectTestOrganization("Rotation Isolation Test");
+
+    try {
+        const created = await createProjectForTest(
+            organizationId,
+            "Rotation Isolation Project"
+        );
+
+        const accountId = created.project.meteringAccountId;
+
+        const rejected = await post(
+            `/accounts/${accountId}/api-key/rotate`,
+            {},
+            { "X-Admin-Key": getAdminKey() }
+        );
+
+        assert.equal(rejected.status, 404);
+
+        const existingKey = await fetch(
+            "http://localhost:3001/account",
+            {
+                headers: {
+                    "X-API-Key": created.apiKey
+                }
+            }
+        );
+
+        assert.equal(existingKey.status, 200);
+
+        for (const invalidId of [
+            "0",
+            "-1",
+            "abc",
+            "1.5",
+            "9223372036854775808"
+        ]) {
+            const response = await post(
+                `/accounts/${invalidId}/api-key/rotate`,
+                {},
+                { "X-Admin-Key": getAdminKey() }
+            );
+
+            assert.equal(response.status, 400);
+        }
+
+        const missing = await post(
+            "/accounts/9223372036854775807/api-key/rotate",
+            {},
+            { "X-Admin-Key": getAdminKey() }
+        );
+
+        assert.equal(missing.status, 404);
+
     } finally {
         await cleanupProjectTestOrganization(organizationId);
     }

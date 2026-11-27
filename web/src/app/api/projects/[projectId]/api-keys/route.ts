@@ -1,6 +1,10 @@
 import { tryLoadMeteringEnvironment } from "@/lib/environment";
 
 import { NextResponse } from "next/server";
+import {
+  readLimitedJson,
+  RequestJsonError,
+} from "@/lib/request-json";
 import { authorizeProjectCreation } from "@/lib/authorize-project-creation";
 
 type RouteContext = {
@@ -73,6 +77,7 @@ export async function GET(
         headers: {
           "X-Admin-Key": config.adminKey,
         },
+        redirect: "error",
         cache: "no-store",
         signal: AbortSignal.timeout(10000),
       }
@@ -178,8 +183,15 @@ export async function POST(
   let body: unknown;
 
   try {
-    body = await request.json();
-  } catch {
+    body = await readLimitedJson(request);
+  } catch (error) {
+    if (error instanceof RequestJsonError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.status }
+      );
+    }
+
     return NextResponse.json(
       { error: "Invalid JSON" },
       { status: 400 }
@@ -229,6 +241,7 @@ export async function POST(
           organizationId: authorization.organizationId,
           name,
         }),
+        redirect: "error",
         cache: "no-store",
         signal: AbortSignal.timeout(10000),
       }
@@ -262,14 +275,33 @@ export async function POST(
       typeof payload !== "object" ||
       !("apiKey" in payload) ||
       typeof payload.apiKey !== "string" ||
-      !payload.apiKey.startsWith("um_") ||
+      !/^um_[0-9a-f]{64}$/.test(payload.apiKey) ||
       !("projectId" in payload) ||
-      payload.projectId !== projectId
+      payload.projectId !== projectId ||
+      !("id" in payload) ||
+      typeof payload.id !== "string" ||
+      !payload.id ||
+      !("name" in payload) ||
+      payload.name !== name ||
+      !("keyPrefix" in payload) ||
+      payload.keyPrefix !== payload.apiKey.slice(0, 12) ||
+      !("createdAt" in payload) ||
+      typeof payload.createdAt !== "string" ||
+      !("revokedAt" in payload) ||
+      payload.revokedAt !== null
     ) {
       throw new Error("Invalid API key creation response");
     }
 
-    return NextResponse.json(payload, {
+    return NextResponse.json({
+      id: payload.id,
+      projectId: payload.projectId,
+      name: payload.name,
+      keyPrefix: payload.keyPrefix,
+      createdAt: payload.createdAt,
+      revokedAt: payload.revokedAt,
+      apiKey: payload.apiKey,
+    }, {
       status: 201,
       headers: {
         "Cache-Control": "no-store",

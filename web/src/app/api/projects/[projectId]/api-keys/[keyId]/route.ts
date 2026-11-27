@@ -58,6 +58,7 @@ export async function DELETE(
         headers: {
           "X-Admin-Key": adminKey,
         },
+        redirect: "error",
         cache: "no-store",
         signal: AbortSignal.timeout(10000),
       }

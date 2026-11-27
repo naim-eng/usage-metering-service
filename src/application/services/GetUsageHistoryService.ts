@@ -1,3 +1,4 @@
+import { isValidPagination } from "../../input-validation.js";
 
 import type { PrismaClient } from "../../generated/prisma/client.js";
 
@@ -11,6 +12,10 @@ export class GetUsageHistoryService {
     constructor(private readonly prisma: PrismaClient) {}
 
     async execute(input: GetUsageHistoryInput) {
+        if (!isValidPagination(input.page, input.limit)) {
+            throw new RangeError("Invalid pagination");
+        }
+
         const offset = (input.page - 1) * input.limit;
 
         const requests = await this.prisma.usage_requests.findMany({

@@ -60,11 +60,11 @@ jobs:
           count=$(docker compose exec -T db \
             psql -U "$DB_USER" -d "$DB_NAME" -Atqc \
             "SELECT COUNT(*) FROM schema_migrations;")
-          if [ "$count" != "10" ]; then
-            echo "Expected 10 migration records, found: $count"
+          if [ "$count" != "11" ]; then
+            echo "Expected 11 migration records, found: $count"
             exit 1
           fi
-          echo "Verified all 10 migration records."
+          echo "Verified all 11 migration records."
 
       - name: Verify migration idempotency
         run: |
@@ -72,7 +72,7 @@ jobs:
           count=$(docker compose exec -T db \
             psql -U "$DB_USER" -d "$DB_NAME" -Atqc \
             "SELECT COUNT(*) FROM schema_migrations;")
-          if [ "$count" != "10" ]; then
+          if [ "$count" != "11" ]; then
             echo "Migration history changed unexpectedly: $count"
             exit 1
           fi
@@ -162,11 +162,11 @@ jobs:
           count=$(docker compose -f compose.e2e.yml exec -T db \
             psql -U metering_e2e -d usage_metering_e2e -Atqc \
             "SELECT COUNT(*) FROM public.schema_migrations;")
-          if [ "$count" != "10" ]; then
-            echo "Expected 10 migration records, found: $count"
+          if [ "$count" != "11" ]; then
+            echo "Expected 11 migration records, found: $count"
             exit 1
           fi
-          echo "Verified all 10 E2E migration records."
+          echo "Verified all 11 E2E migration records."
 
       - name: Verify E2E backend readiness
         id: e2e_ready
@@ -239,7 +239,7 @@ jobs:
                 WHEN table_record.schemaname = 'public'
                   AND table_record.tablename = 'plans' THEN 4
                 WHEN table_record.schemaname = 'public'
-                  AND table_record.tablename = 'schema_migrations' THEN 10
+                  AND table_record.tablename = 'schema_migrations' THEN 11
                 ELSE 0
               END;
 

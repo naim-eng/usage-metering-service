@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { generateApiKey, hashApiKey } from "../../api-keys.js";
 import type { PrismaClient } from "../../generated/prisma/client.js";
 import { CreateAccountService } from "./CreateAccountService.js";
 
@@ -35,6 +36,18 @@ export class CreateProjectService {
                 }
             });
 
+            const apiKey = generateApiKey();
+
+            await tx.project_api_keys.create({
+                data: {
+                    id: randomUUID(),
+                    project_id: project.id,
+                    name: "Original project key",
+                    key_hash: hashApiKey(apiKey),
+                    key_prefix: apiKey.slice(0, 12)
+                }
+            });
+
             return {
                 project: {
                     id: project.id,
@@ -44,7 +57,7 @@ export class CreateProjectService {
                     status: project.status,
                     meteringAccountId: result.account.id
                 },
-                apiKey: result.apiKey
+                apiKey
             };
         });
     }

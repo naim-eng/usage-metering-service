@@ -205,3 +205,196 @@ The following remain required before production approval:
 - Validate production SMTP connectivity and delivery.
 
 Passing local tests does not establish production readiness.
+
+## API key and administrative endpoint security
+
+### API credential generation and storage
+
+- API keys contain 256 bits of cryptographically secure randomness.
+- Credentials use the format `um_` followed by 64 lowercase
+  hexadecimal characters.
+- Only SHA-256 credential hashes are persisted.
+- Complete credentials are returned during creation or rotation.
+- Managed project key listings expose metadata, not credential
+  hashes or complete credentials.
+- Credential-bearing administrative responses use Cache-Control:
+  no-store.
+
+### Administrative authentication
+
+Administrative endpoints require the X-Admin-Key header.
+
+The shared administrative authentication middleware rejects missing,
+malformed, duplicated and incorrect credentials. Credential
+comparison uses fixed-length SHA-256 digests and timing-safe
+comparison.
+
+The administrative credential must remain server-side and must
+never be distributed to customer applications.
+
+### Managed project credentials
+
+Every newly provisioned project receives an initial managed
+credential named Original project key.
+
+Additional credentials can be generated and revoked independently.
+Revoked credentials and credentials belonging to inactive projects
+cannot authenticate new requests.
+
+Project-linked metering accounts cannot authenticate directly
+through their underlying account credential.
+
+Migration 011 transfers existing project account credential hashes
+into the managed project credential table and replaces the
+underlying account hashes. Existing standalone account credentials
+remain unchanged.
+
+Production migration requires coordinated application deployment
+and suspension of credential-related writes during migration.
+
+### Standalone account credential rotation
+
+Endpoint:
+
+    POST /accounts/:accountId/api-key/rotate
+
+Required header:
+
+    X-Admin-Key: <administrative credential>
+
+A successful request returns HTTP 200 with accountId and apiKey.
+
+The replacement credential invalidates the previous credential
+for subsequent authentication attempts. Rotation updates only
+the credential hash and does not recreate the account.
+
+Project-linked accounts are excluded from standalone rotation.
+
+Invalid account identifiers return HTTP 400. Missing accounts
+and project-linked accounts return HTTP 404. Invalid
+administrative credentials return HTTP 401.
+
+Rotation has no grace period. Applications must replace their
+stored credential immediately.
+
+Concurrent rotations use last-write-wins semantics. Operators
+must serialize rotation requests for the same account.
+Requests authenticated before rotation or revocation may
+still complete.
+
+### Security validation
+
+Stage 7 validation includes:
+
+- 11 new API credential and administrative authentication unit tests.
+- 59 passing backend integration tests.
+- Four successful legacy migration verification checks.
+- Three passing targeted project and credential browser tests.
+- Successful backend and frontend TypeScript validation.
+- Successful frontend lint validation.
+- Migration 011 applied to development, backend integration
+  and isolated E2E databases.
+
+Full regression testing remains required at GitHub Checkpoint 3.
+
+Production transport security, administrative credential lifecycle,
+security audit logging and deployment safeguards remain subject
+to subsequent security stages.
+
+## Tenant isolation and authorization
+
+### Tenant security boundaries
+
+- Customer project operations require an authenticated session and valid organization membership.
+- Active workspace selection does not independently grant access to organization resources.
+- Membership and role authorization are checked server-side.
+- Project creation and API key management require owner or administrator permissions.
+- Ordinary members are denied access to the current owner/admin project API endpoints, including project listings and dashboards.
+- Removed memberships cannot continue accessing project APIs through stale workspace selections.
+- Customer-supplied organization identifiers do not override server-resolved tenant context.
+
+### Backend tenant isolation
+
+- Administrative project endpoints require administrative authentication.
+- Project lookups are scoped to both organization and project identifiers.
+- Project API key operations are scoped to the authorized project.
+- Dashboard queries use the metering account associated with the authorized project.
+- Metering API credentials cannot grant access to unrelated accounts.
+- Administrative credentials remain server-side.
+- Administrative frontend requests reject backend redirects.
+
+### API response protection
+
+- Project creation responses validate organization ownership and expected project metadata.
+- API key creation responses validate project identity and credential format.
+- Dashboard responses validate organization and project identity.
+- Explicit response field allowlists prevent unexpected backend fields from being forwarded.
+- Nested dashboard records are filtered according to their expected response contracts.
+- Missing or incorrectly typed required dashboard fields cause response rejection.
+- API key listings expose credential metadata rather than plaintext credentials or stored hashes.
+
+### Organization privilege escalation protection
+
+The existing Better Auth organization permission policy is retained.
+
+Direct endpoint tests verify that ordinary members cannot:
+
+- Promote themselves to administrator or owner.
+- Modify organization metadata.
+- Create an unauthorized owner invitation.
+- Remove their own membership through the administrative removal endpoint.
+
+Membership remains unchanged after the tested unauthorized operations.
+
+### Security validation
+
+Targeted validation includes independent customer isolation, isolation between workspaces owned by the same customer, unauthorized workspace activation, forged organization identifiers, stale membership authorization, role enforcement and credential metadata protection.
+
+Eight dashboard response unit tests cover valid response contracts, unexpected sensitive fields, malformed records, missing sections, incorrect field types and unavailable historical limits.
+
+### Remaining security considerations
+
+- Nested dashboard records without tenant identifiers rely on backend account-scoped queries for ownership enforcement.
+- Response filtering validates field structure and types but does not independently establish the ownership of every nested record.
+- Dashboard malformed-response tests exercise the filtering function directly rather than a simulated compromised backend.
+- Complete invitation, membership removal and ownership transfer lifecycle validation remains necessary before introducing customer-facing team management.
+- Concurrent membership revocation and already-authorized in-flight requests require separate consideration.
+- Production trusted client IP configuration remains part of production configuration hardening.
+- Full regression testing and remote CI validation will be performed at GitHub checkpoint 3.
+
+
+## Input validation and request protection
+
+The application implements the following request protection controls:
+
+- Backend and frontend JSON payload limits of 16 KiB.
+- Rejection of unsupported JSON content types and compressed request bodies.
+- Rejection of malformed JSON and invalid backend JSON structures.
+- Frontend rejection of malformed UTF-8 and inconsistent content lengths.
+- Consumption authentication before JSON payload parsing.
+- Canonical positive integer validation for backend history and project pagination.
+- Maximum history page size of 100 and maximum offset of 100,000.
+- Duplicate frontend dashboard query parameter rejection.
+- Reporting month validation using YYYY-MM with year zero rejected.
+- Control character and malformed Unicode rejection for account names,
+  plan names, external user identifiers, consumption request identifiers
+  and managed API key names.
+- Authentication response cache protection using Cache-Control: no-store.
+- Compatibility with empty authentication POST requests.
+
+Targeted validation includes payload boundaries, malformed JSON,
+unsupported encodings, pagination boundaries, Unicode validation,
+authentication precedence and session security compatibility.
+
+Remaining production safeguards:
+
+- Trusted ingress request size limits and request timeouts.
+- Trusted client IP configuration and distributed rate limiting.
+- Authentication request parsing before native rate limiting.
+- Explicit rate-limit exhaustion and middleware ordering regression tests.
+- Additional authenticated pagination and identifier endpoint coverage.
+- Resource limits for large reporting datasets.
+- Further validation of empty and streamed authentication requests.
+
+These controls have been validated locally. Production infrastructure
+and deployment-specific protections require separate verification.

@@ -85,7 +85,15 @@ test("manages multiple project API keys securely", async () => {
             where: { project_id: projectId }
         });
 
-        assert.equal(stored.length, 2);
+        assert.equal(stored.length, 3);
+
+        const originalStored = stored.find(
+            item => item.key_hash === hashApiKey(createdProject.apiKey)
+        );
+
+        assert.ok(originalStored);
+        assert.equal(originalStored.name, "Original project key");
+        assert.equal(originalStored.revoked_at, null);
 
         const firstStored = stored.find((item) => item.id === first.id);
         const secondStored = stored.find((item) => item.id === second.id);
@@ -105,7 +113,7 @@ test("manages multiple project API keys securely", async () => {
             projectId
         );
 
-        assert.equal(listed.length, 2);
+        assert.equal(listed.length, 3);
 
         for (const item of listed) {
             assert.equal("apiKey" in item, false);
@@ -170,6 +178,20 @@ test("manages multiple project API keys securely", async () => {
 
         assert.ok(revokedKey?.revokedAt);
         assert.equal(activeKey?.revokedAt, null);
+
+        // The initial project credential is also revocable.
+        await apiKeysService.revoke(
+            organizationId,
+            projectId,
+            originalStored.id
+        );
+
+        const originalRevoked =
+            await prisma.project_api_keys.findUniqueOrThrow({
+                where: { id: originalStored.id }
+            });
+
+        assert.ok(originalRevoked.revoked_at);
 
         // Revoking the same key again must fail.
         await assert.rejects(

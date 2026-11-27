@@ -190,17 +190,33 @@ test("isolates projects between independent customers", async ({
 
       const ownKeyListing = await ownKeys.json();
 
-      expect(ownKeyListing.apiKeys).toHaveLength(1);
+      expect(ownKeyListing.apiKeys).toHaveLength(2);
+      expect(ownKeyListing.apiKeys).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "Original project key",
+            revokedAt: null,
+          }),
+        ])
+      );
 
-      expect(ownKeyListing.apiKeys[0]).toMatchObject({
+      expect(
+        ownKeyListing.apiKeys.find(
+          (key: { id: string }) => key.id === createdKey.id
+        )
+      ).toMatchObject({
         id: createdKey.id,
         projectId: own.id,
         name: "E2E tenant isolation key",
         revokedAt: null,
       });
 
-      expect(ownKeyListing.apiKeys[0]).not.toHaveProperty("apiKey");
-      expect(ownKeyListing.apiKeys[0]).not.toHaveProperty("keyHash");
+      for (const key of ownKeyListing.apiKeys) {
+        expect(key).not.toHaveProperty("apiKey");
+        expect(key).not.toHaveProperty("keyHash");
+        expect(key).not.toHaveProperty("key_hash");
+        expect(key).not.toHaveProperty("api_key_hash");
+      }
 
       const forgedListing = await page.request.get(
         `/api/projects?organizationId=${encodeURIComponent(foreign.organizationId)}`,
@@ -229,9 +245,22 @@ test("isolates projects between independent customers", async ({
 
       const originalListing = await before.json();
 
-      expect(originalListing.apiKeys).toHaveLength(1);
+      expect(originalListing.apiKeys).toHaveLength(2);
+      expect(originalListing.apiKeys).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "Original project key",
+            revokedAt: null,
+          }),
+        ])
+      );
 
-      const key = originalListing.apiKeys[0];
+      const key = originalListing.apiKeys.find(
+        (item: { name: string }) =>
+          item.name === "E2E tenant isolation key"
+      );
+
+      expect(key).toBeDefined();
 
       expect(key.revokedAt).toBeNull();
 

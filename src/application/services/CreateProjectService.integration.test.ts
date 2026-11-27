@@ -59,7 +59,20 @@ test("creates a project with its own metering account", async () => {
         });
 
         assert.equal(account.plan_id, starter.id);
-        assert.equal(account.api_key_hash, hashApiKey(result.apiKey));
+        assert.notEqual(
+            account.api_key_hash,
+            hashApiKey(result.apiKey)
+        );
+
+        const initialKeys = await prisma.project_api_keys.findMany({
+            where: { project_id: result.project.id }
+        });
+
+        assert.equal(initialKeys.length, 1);
+        assert.equal(initialKeys[0].name, "Original project key");
+        assert.equal(initialKeys[0].key_hash, hashApiKey(result.apiKey));
+        assert.equal(initialKeys[0].key_prefix, result.apiKey.slice(0, 12));
+        assert.equal(initialKeys[0].revoked_at, null);
 
         const history = await prisma.plan_limit_history.findFirstOrThrow({
             where: {
@@ -71,6 +84,19 @@ test("creates a project with its own metering account", async () => {
         assert.equal(history.monthly_limit, 100n);
         assert.equal(history.max_per_request, 20n);
     } finally {
+        const ownedProjects = await prisma.projects.findMany({
+            where: { organization_id: organizationId },
+            select: { id: true }
+        });
+
+        await prisma.project_api_keys.deleteMany({
+            where: {
+                project_id: {
+                    in: ownedProjects.map(project => project.id)
+                }
+            }
+        });
+
         await prisma.projects.deleteMany({
             where: { organization_id: organizationId }
         });
@@ -150,6 +176,19 @@ test("rejects duplicate project slugs without orphaned accounts", async () => {
 
         assert.equal(projectCount, 1);
     } finally {
+        const ownedProjects = await prisma.projects.findMany({
+            where: { organization_id: organizationId },
+            select: { id: true }
+        });
+
+        await prisma.project_api_keys.deleteMany({
+            where: {
+                project_id: {
+                    in: ownedProjects.map(project => project.id)
+                }
+            }
+        });
+
         await prisma.projects.deleteMany({
             where: { organization_id: organizationId }
         });

@@ -1,3 +1,4 @@
+import { isSafeText } from "../../input-validation.js";
 
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "../../generated/prisma/client.js";
@@ -57,6 +58,10 @@ export class ManageProjectApiKeysService {
         projectId: string,
         name: string
     ) {
+        if (!isSafeText(name)) {
+            throw new InvalidProjectApiKeyNameError();
+        }
+
         const trimmedName = name.trim();
 
         if (

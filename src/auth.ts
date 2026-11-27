@@ -1,7 +1,7 @@
 
 import type { Request, Response, NextFunction } from "express";
 import { prisma } from "./infrastructure/database/prisma.js";
-import { hashApiKey } from "./api-keys.js";
+import { hashApiKey, isValidApiKey } from "./api-keys.js";
 import { logger } from "./infrastructure/logging/logger.js";
 
 export async function authenticateAccount(
@@ -9,11 +9,12 @@ export async function authenticateAccount(
     res: Response,
     next: NextFunction
 ): Promise<void> {
-    const apiKey = req.header("X-API-Key");
+    const values = req.headersDistinct["x-api-key"];
+    const apiKey = values?.length === 1 ? values[0] : undefined;
 
-    if (!apiKey || !apiKey.startsWith("um_")) {
+    if (!isValidApiKey(apiKey)) {
         res.status(401).json({
-            error: "Missing or invalid API key"
+            error: "Invalid API key"
         });
         return;
     }
@@ -32,6 +33,26 @@ export async function authenticateAccount(
                 plan_id: true
             }
         });
+
+        // Project-linked accounts must use managed project keys.
+        // Standalone accounts remain independently accessible.
+        if (account) {
+            const linkedProject = await prisma.projects.findUnique({
+                where: {
+                    metering_account_id: account.id
+                },
+                select: {
+                    status: true
+                }
+            });
+
+            if (linkedProject) {
+                res.status(401).json({
+                    error: "Invalid API key"
+                });
+                return;
+            }
+        }
 
         // If the key is not an account key, check project API keys.
         if (!account) {

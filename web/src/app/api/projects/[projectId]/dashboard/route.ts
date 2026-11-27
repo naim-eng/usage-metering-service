@@ -1,5 +1,6 @@
 import { tryLoadMeteringEnvironment } from "@/lib/environment";
 import { NextResponse } from "next/server";
+import { sanitizeDashboardResponse } from "@/lib/dashboard-response";
 import { authorizeProjectCreation } from "@/lib/authorize-project-creation";
 
 export async function GET(
@@ -25,6 +26,15 @@ export async function GET(
   }
 
   const url = new URL(request.url);
+
+  for (const parameter of ["month", "page", "limit"]) {
+    if (url.searchParams.getAll(parameter).length > 1) {
+      return NextResponse.json(
+        { error: "Duplicate query parameter" },
+        { status: 400 }
+      );
+    }
+  }
   const requestedMonth = url.searchParams.get("month");
 
   const now = new Date();
@@ -33,7 +43,7 @@ export async function GET(
 
   const month = requestedMonth ?? currentMonth;
 
-  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+  if (!/^(?!0000)\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
     return NextResponse.json(
       { error: "Invalid month. Expected YYYY-MM." },
       { status: 400 }
@@ -60,7 +70,8 @@ export async function GET(
     !Number.isSafeInteger(page) ||
     !Number.isSafeInteger(limit) ||
     limit > 100 ||
-    !Number.isSafeInteger((page - 1) * limit)
+    !Number.isSafeInteger((page - 1) * limit) ||
+    (page - 1) * limit > 100000
   ) {
     return NextResponse.json(
       { error: "Invalid page or limit" },
@@ -92,6 +103,7 @@ export async function GET(
         headers: {
           "X-Admin-Key": adminKey
         },
+        redirect: "error",
         cache: "no-store",
         signal: AbortSignal.timeout(10000)
       }
@@ -136,7 +148,40 @@ export async function GET(
       throw new Error("Invalid dashboard response");
     }
 
-    return NextResponse.json(result, {
+    const dashboard = result as Record<string, unknown>;
+    const project = dashboard.project;
+
+    if (
+      !project ||
+      typeof project !== "object" ||
+      Array.isArray(project) ||
+      !("id" in project) ||
+      project.id !== projectId ||
+      !("organizationId" in project) ||
+      project.organizationId !== authorization.organizationId ||
+      !("name" in project) ||
+      typeof project.name !== "string" ||
+      !("slug" in project) ||
+      typeof project.slug !== "string" ||
+      !("status" in project) ||
+      typeof project.status !== "string" ||
+      !("createdAt" in project) ||
+      typeof project.createdAt !== "string"
+    ) {
+      throw new Error("Invalid dashboard project");
+    }
+
+    return NextResponse.json({
+      project: {
+        id: project.id,
+        organizationId: project.organizationId,
+        name: project.name,
+        slug: project.slug,
+        status: project.status,
+        createdAt: project.createdAt,
+      },
+      ...sanitizeDashboardResponse(dashboard),
+    }, {
       headers: {
         "Cache-Control": "no-store"
       }

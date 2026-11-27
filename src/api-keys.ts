@@ -11,3 +11,12 @@ export function hashApiKey(apiKey: string): string {
         .update(apiKey)
         .digest("hex");
 }
+
+// Accept only the canonical generated API key format.
+export function isValidApiKey(value: unknown): value is string {
+    return (
+        typeof value === "string" &&
+        value.length === 67 &&
+        /^um_[0-9a-f]{64}$/.test(value)
+    );
+}

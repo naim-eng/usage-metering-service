@@ -1,3 +1,4 @@
+import { isSafeText, parsePositiveInteger } from "./input-validation.js";
 import { logger } from "./infrastructure/logging/logger.js";
 
 import { Router } from "express";
@@ -35,7 +36,7 @@ plansRouter.post("/", authenticateAccount, async (req, res) => {
         req.body ?? {};
 
     if (
-        typeof name !== "string" ||
+        !isSafeText(name) ||
         !name.trim() ||
         name.length > 100 ||
         !["account", "user"].includes(planType) ||
@@ -70,7 +71,7 @@ plansRouter.post("/", authenticateAccount, async (req, res) => {
 
 // Update a custom plan and record changes for assigned members.
 plansRouter.patch("/:planId", authenticateAccount, async (req, res) => {
-    const planId = Number(req.params.planId);
+    const planId = parsePositiveInteger(req.params.planId);
 
     const { name, monthlyLimit, maxPerRequest } = req.body ?? {};
 
@@ -94,7 +95,7 @@ plansRouter.patch("/:planId", authenticateAccount, async (req, res) => {
 
     if (
         (name !== undefined &&
-            (typeof name !== "string" ||
+            (!isSafeText(name) ||
              !name.trim() ||
              name.length > 100)) ||
         (monthlyLimit !== undefined &&

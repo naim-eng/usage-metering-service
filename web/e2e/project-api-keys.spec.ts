@@ -103,13 +103,26 @@ test("generates and revokes a project API key", async ({
       exact: true,
     });
 
-    await expect(revokeButton).toHaveCount(1);
+    await expect(
+      page.getByText("Original project key", { exact: true })
+    ).toBeVisible();
+
+    await expect(revokeButton).toHaveCount(2);
 
     page.once("dialog", async (dialog) => {
       await dialog.accept();
     });
 
-    await revokeButton.click();
+    await page
+      .getByTestId("project-api-key-record")
+      .filter({
+        has: page.getByText(keyName, { exact: true }),
+      })
+      .getByRole("button", {
+        name: "Revoke",
+        exact: true,
+      })
+      .click();
 
     await expect(
       page.getByText(
@@ -122,7 +135,7 @@ test("generates and revokes a project API key", async ({
       page.getByText("Revoked", { exact: true })
     ).toBeVisible();
 
-    await expect(revokeButton).toHaveCount(0);
+    await expect(revokeButton).toHaveCount(1);
 
     const revokedResponse = await page.request.get(
       "http://127.0.0.1:3003/account",
@@ -150,7 +163,7 @@ test("generates and revokes a project API key", async ({
       page.getByText("Revoked", { exact: true })
     ).toBeVisible();
 
-    await expect(revokeButton).toHaveCount(0);
+    await expect(revokeButton).toHaveCount(1);
     await expect(plaintextKey).toHaveCount(0);
   } finally {
     await cleanupTestProject(

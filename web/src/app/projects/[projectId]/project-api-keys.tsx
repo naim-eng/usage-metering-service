@@ -306,6 +306,7 @@ export default function ProjectApiKeys({ projectId }: Props) {
             {keys.map((key) => (
               <div
                 key={key.id}
+                data-testid="project-api-key-record"
                 className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 p-4"
               >
                 <div>

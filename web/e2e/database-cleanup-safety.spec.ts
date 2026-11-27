@@ -198,7 +198,7 @@ test("rolls back project cleanup when a dependent user prevents account deletion
 
     expect(before).toEqual({
       accounts: 1,
-      api_keys: 1,
+      api_keys: 2,
       plan_history: 1,
       users: 1,
     });

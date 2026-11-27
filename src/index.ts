@@ -1,3 +1,4 @@
+import { isSafeText } from "./input-validation.js";
 import { loadApiConfig } from "./api-config.js";
 import { errorHandler } from "./infrastructure/logging/error-handler.js";
 import { projectsRouter } from "./projects.js";
@@ -32,7 +33,15 @@ import { ListPlansService } from "./application/services/ListPlansService.js";
 
 import { prisma } from "./infrastructure/database/prisma.js";
 import { authenticateAccount } from "./auth.js";
+import { authenticateAdmin } from "./admin-auth.js";
+import { RotateAccountApiKeyService } from "./application/services/RotateAccountApiKeyService.js";
 import express from "express";
+import {
+    parseJsonBody,
+    requireJsonContentType,
+    requireJsonObject,
+    requestParsingErrorHandler
+} from "./request-protection.js";
 import helmet from "helmet";
 import { configureTrustedProxy } from "./proxy-config.js";
 import { createRequestLogger } from "./infrastructure/logging/request-logger.js";
@@ -59,7 +68,6 @@ const listPlansService = new ListPlansService(prisma);
 const { port: PORT } = loadApiConfig();
 
 app.use(helmet());
-app.use(express.json());
 
 // Apply separate limits to metering and management traffic.
 app.use((req, res, next) => {
@@ -68,12 +76,42 @@ app.use((req, res, next) => {
         return;
     }
 
-    if (req.path === "/consume") {
+    if (
+        req.method === "POST" &&
+        /^\/consume\/?$/i.test(req.path)
+    ) {
         next();
         return;
     }
 
     managementLimiter(req, res, next);
+});
+
+// Parse management requests only after rate limiting.
+app.use((req, res, next) => {
+    if (
+        req.method === "POST" &&
+        /^\/consume\/?$/i.test(req.path)
+    ) {
+        next();
+        return;
+    }
+
+    requireJsonContentType(req, res, (error) => {
+        if (error) {
+            next(error);
+            return;
+        }
+
+        parseJsonBody(req, res, (parseError) => {
+            if (parseError) {
+                next(parseError);
+                return;
+            }
+
+            requireJsonObject(req, res, next);
+        });
+    });
 });
 
 app.use("/projects", projectsRouter);
@@ -100,21 +138,12 @@ app.get("/plans", async (_req, res) => {
 });
 
 // Create an account and its initial quota-history snapshot.
-app.post("/accounts", async (req, res) => {
-    const adminKey = req.header("X-Admin-Key");
-
-    if (
-        !process.env.ADMIN_API_KEY ||
-        adminKey !== process.env.ADMIN_API_KEY
-    ) {
-        res.status(401).json({ error: "Unauthorized" });
-        return;
-    }
+app.post("/accounts", authenticateAdmin, async (req, res) => {
 
     const { name, planId } = req.body ?? {};
 
     if (
-        typeof name !== "string" ||
+        !isSafeText(name) ||
         !name.trim() ||
         name.length > 100 ||
         !Number.isSafeInteger(planId) ||
@@ -148,13 +177,59 @@ app.post("/accounts", async (req, res) => {
     }
 });
 
+// Rotate a standalone account credential.
+app.post(
+    "/accounts/:accountId/api-key/rotate",
+    authenticateAdmin,
+    async (req, res) => {
+        const rawId = req.params.accountId;
+
+        if (
+            typeof rawId !== "string" ||
+            !/^[1-9][0-9]{0,18}$/.test(rawId) ||
+            BigInt(rawId) > 9223372036854775807n
+        ) {
+            res.status(400).json({
+                error: "Invalid account ID"
+            });
+            return;
+        }
+
+        try {
+            const service = new RotateAccountApiKeyService(prisma);
+            const result = await service.execute(BigInt(rawId));
+
+            if (!result) {
+                res.status(404).json({
+                    error: "Standalone account not found"
+                });
+                return;
+            }
+
+            res.status(200).json(result);
+        } catch {
+            logger.error(
+                {
+                    event: "api_operation_failed",
+                    operation: "rotate_account_api_key"
+                },
+                "API operation failed"
+            );
+
+            res.status(500).json({
+                error: "Failed to rotate API key"
+            });
+        }
+    }
+);
+
 // Create a user and their initial quota-history snapshot.
 app.post("/users", authenticateAccount, async (req, res) => {
     const accountId = res.locals.account.id;
     const { userId, planId } = req.body ?? {};
 
     if (
-        typeof userId !== "string" ||
+        !isSafeText(userId) ||
         !userId.trim() ||
         userId.length > 100 ||
         !Number.isSafeInteger(planId) ||
@@ -209,17 +284,20 @@ app.post(
     consumptionPreAuthLimiter,
     authenticateAccount,
     consumptionLimiter,
+    requireJsonContentType,
+    parseJsonBody,
+    requireJsonObject,
     async (req, res) => {
         const accountId = String(res.locals.account.id);
         const { userId, units, requestId } = req.body ?? {};
 
         if (
-            typeof userId !== "string" ||
+            !isSafeText(userId) ||
             !userId.trim() ||
             userId.length > 100 ||
             !Number.isSafeInteger(units) ||
             units <= 0 ||
-            typeof requestId !== "string" ||
+            !isSafeText(requestId) ||
             !requestId.trim() ||
             requestId.length > 100
         ) {
@@ -320,7 +398,7 @@ app.patch("/users/plan", authenticateAccount, async (req, res) => {
     const { userId, planId } = req.body ?? {};
 
     if (
-        typeof userId !== "string" ||
+        !isSafeText(userId) ||
         !userId.trim() ||
         userId.length > 100 ||
         !Number.isSafeInteger(planId) ||
@@ -372,6 +450,7 @@ app.patch("/users/plan", authenticateAccount, async (req, res) => {
     }
 });
 
+app.use(requestParsingErrorHandler);
 app.use(errorHandler);
 
 // Start the HTTP server and register graceful shutdown.

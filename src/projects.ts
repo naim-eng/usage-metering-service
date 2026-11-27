@@ -1,6 +1,11 @@
+import {
+    MAX_HISTORY_OFFSET,
+    parsePositiveInteger
+} from "./input-validation.js";
 import { logger } from "./infrastructure/logging/logger.js";
 
 import { Router } from "express";
+import { authenticateAdmin } from "./admin-auth.js";
 import { Prisma } from "./generated/prisma/client.js";
 import { prisma } from "./infrastructure/database/prisma.js";
 import {
@@ -20,6 +25,7 @@ import {
 } from "./application/services/ManageProjectApiKeysService.js";
 
 export const projectsRouter = Router();
+projectsRouter.use(authenticateAdmin);
 
 const accountService = new CreateAccountService(prisma);
 const projectService = new CreateProjectService(prisma, accountService);
@@ -28,13 +34,6 @@ const monthlyReportService = new GetMonthlyReportService(prisma);
 const usageHistoryService = new GetUsageHistoryService(prisma);
 const notificationsService = new GetNotificationsService(prisma);
 const apiKeysService = new ManageProjectApiKeysService(prisma);
-
-function isAuthorized(adminKey: string | undefined): boolean {
-    return Boolean(
-        process.env.ADMIN_API_KEY &&
-        adminKey === process.env.ADMIN_API_KEY
-    );
-}
 
 function validIdentifier(value: unknown): value is string {
     return (
@@ -45,11 +44,6 @@ function validIdentifier(value: unknown): value is string {
 }
 
 projectsRouter.get("/", async (req, res) => {
-    if (!isAuthorized(req.header("X-Admin-Key"))) {
-        res.status(401).json({ error: "Unauthorized" });
-        return;
-    }
-
     const organizationId =
         typeof req.query.organizationId === "string"
             ? req.query.organizationId.trim()
@@ -96,11 +90,6 @@ projectsRouter.get("/", async (req, res) => {
 
 // Retrieve dashboard data for an organization-owned project.
 projectsRouter.get("/:projectId/dashboard", async (req, res) => {
-    if (!isAuthorized(req.header("X-Admin-Key"))) {
-        res.status(401).json({ error: "Unauthorized" });
-        return;
-    }
-
     const projectId = req.params.projectId.trim();
 
     const organizationId =
@@ -124,7 +113,7 @@ projectsRouter.get("/:projectId/dashboard", async (req, res) => {
         requestedMonth !== undefined &&
         (
             typeof requestedMonth !== "string" ||
-            !/^\d{4}-(0[1-9]|1[0-2])$/.test(requestedMonth)
+            !/^(?!0000)\d{4}-(0[1-9]|1[0-2])$/.test(requestedMonth)
         )
     ) {
         res.status(400).json({
@@ -153,14 +142,15 @@ projectsRouter.get("/:projectId/dashboard", async (req, res) => {
         return;
     }
 
-    const page = Number(requestedPage);
-    const limit = Number(requestedLimit);
+    const page = parsePositiveInteger(requestedPage);
+    const limit = parsePositiveInteger(requestedLimit);
 
     if (
         !Number.isSafeInteger(page) ||
         !Number.isSafeInteger(limit) ||
         limit > 100 ||
-        !Number.isSafeInteger((page - 1) * limit)
+        !Number.isSafeInteger((page - 1) * limit) ||
+        (page - 1) * limit > MAX_HISTORY_OFFSET
     ) {
         res.status(400).json({
             error: "Invalid page or limit"
@@ -244,11 +234,6 @@ projectsRouter.get("/:projectId/dashboard", async (req, res) => {
 });
 
 projectsRouter.post("/", async (req, res) => {
-    if (!isAuthorized(req.header("X-Admin-Key"))) {
-        res.status(401).json({ error: "Unauthorized" });
-        return;
-    }
-
     const { organizationId, name, slug, planId } = req.body ?? {};
 
     if (
@@ -302,11 +287,6 @@ projectsRouter.post("/", async (req, res) => {
 
 // Create a new API key for an organization-owned project.
 projectsRouter.post("/:projectId/api-keys", async (req, res) => {
-    if (!isAuthorized(req.header("X-Admin-Key"))) {
-        res.status(401).json({ error: "Unauthorized" });
-        return;
-    }
-
     const projectId = req.params.projectId;
     const { organizationId, name } = req.body ?? {};
 
@@ -346,11 +326,6 @@ projectsRouter.post("/:projectId/api-keys", async (req, res) => {
 
 // List API keys without returning their hashes or plaintext secrets.
 projectsRouter.get("/:projectId/api-keys", async (req, res) => {
-    if (!isAuthorized(req.header("X-Admin-Key"))) {
-        res.status(401).json({ error: "Unauthorized" });
-        return;
-    }
-
     const projectId = req.params.projectId;
     const organizationId = req.query.organizationId;
 
@@ -385,11 +360,6 @@ projectsRouter.get("/:projectId/api-keys", async (req, res) => {
 
 // Revoke an individual project API key.
 projectsRouter.delete("/:projectId/api-keys/:keyId", async (req, res) => {
-    if (!isAuthorized(req.header("X-Admin-Key"))) {
-        res.status(401).json({ error: "Unauthorized" });
-        return;
-    }
-
     const projectId = req.params.projectId;
     const keyId = req.params.keyId;
     const organizationId = req.query.organizationId;

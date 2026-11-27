@@ -194,7 +194,16 @@ test("enforces project API permissions for owners, admins and members", async ({
     const expectedKeys = await beforeKeys.json();
 
     expect(expectedProjects.projects).toHaveLength(3);
-    expect(expectedKeys.apiKeys).toHaveLength(3);
+    expect(expectedKeys.apiKeys).toHaveLength(4);
+    expect(expectedKeys.apiKeys).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "Original project key",
+          projectId: record.id,
+          revokedAt: null,
+        }),
+      ])
+    );
 
     await setTestOrganizationOwnerRole(
       account.email,
@@ -204,6 +213,91 @@ test("enforces project API permissions for owners, admins and members", async ({
     );
 
     currentRole = "member";
+
+    const membershipResponse = await page.request.get(
+      "/api/auth/organization/get-active-member"
+    );
+
+    expect(membershipResponse.status()).toBe(200);
+
+    const membership = await membershipResponse.json();
+
+    expect(membership.role).toBe("member");
+    expect(membership.organizationId).toBe(record.organizationId);
+
+    for (const role of ["admin", "owner"]) {
+      const promotion = await page.request.post(
+        "/api/auth/organization/update-member-role",
+        {
+          data: {
+            memberId: membership.id,
+            organizationId: record.organizationId,
+            role,
+          },
+          maxRedirects: 0,
+        }
+      );
+
+      expect([400, 403]).toContain(promotion.status());
+
+      const unchanged = await page.request.get(
+        "/api/auth/organization/get-active-member"
+      );
+
+      expect(unchanged.status()).toBe(200);
+      expect((await unchanged.json()).role).toBe("member");
+    }
+
+    const organizationUpdate = await page.request.post(
+      "/api/auth/organization/update",
+      {
+        data: {
+          organizationId: record.organizationId,
+          data: {
+            name: "Unauthorized organization update",
+          },
+        },
+        maxRedirects: 0,
+      }
+    );
+
+    expect(organizationUpdate.status()).toBe(403);
+
+    const invitation = await page.request.post(
+      "/api/auth/organization/invite-member",
+      {
+        data: {
+          email: account.email,
+          organizationId: record.organizationId,
+          role: "owner",
+        },
+        maxRedirects: 0,
+      }
+    );
+
+    expect(invitation.status()).toBe(403);
+
+    const removal = await page.request.post(
+      "/api/auth/organization/remove-member",
+      {
+        data: {
+          memberIdOrEmail: membership.id,
+          organizationId: record.organizationId,
+        },
+        maxRedirects: 0,
+      }
+    );
+
+    expect(removal.status()).toBe(403);
+
+    const finalMembership = await page.request.get(
+      "/api/auth/organization/get-active-member"
+    );
+
+    expect(finalMembership.status()).toBe(200);
+    expect((await finalMembership.json()).role).toBe("member");
+
+
 
     const deniedRequests = [
       await page.request.get(

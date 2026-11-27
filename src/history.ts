@@ -1,3 +1,4 @@
+import { parsePositiveInteger, isValidPagination } from "./input-validation.js";
 import { logger } from "./infrastructure/logging/logger.js";
 
 import { Router } from "express";
@@ -14,16 +15,11 @@ historyRouter.get(
     "/history",
     authenticateAccount,
     async (req, res) => {
-        const page = Number(req.query.page ?? 1);
-        const limit = Number(req.query.limit ?? 50);
+        const page = parsePositiveInteger(req.query.page ?? "1");
+        const limit = parsePositiveInteger(req.query.limit ?? "50");
 
         if (
-            !Number.isSafeInteger(page) ||
-            page < 1 ||
-            !Number.isSafeInteger(limit) ||
-            limit < 1 ||
-            limit > 100 ||
-            !Number.isSafeInteger((page - 1) * limit)
+            !isValidPagination(page, limit)
         ) {
             res.status(400).json({
                 error: "Invalid page or limit"

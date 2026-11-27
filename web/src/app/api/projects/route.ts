@@ -1,5 +1,9 @@
 import { tryLoadMeteringEnvironment } from "@/lib/environment";
 import { NextResponse } from "next/server";
+import {
+  readLimitedJson,
+  RequestJsonError,
+} from "@/lib/request-json";
 import { authorizeProjectCreation } from "@/lib/authorize-project-creation";
 
 
@@ -16,8 +20,15 @@ export async function POST(request: Request) {
   let body: unknown;
 
   try {
-    body = await request.json();
-  } catch {
+    body = await readLimitedJson(request);
+  } catch (error) {
+    if (error instanceof RequestJsonError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.status }
+      );
+    }
+
     return NextResponse.json(
       { error: "Invalid JSON" },
       { status: 400 }
@@ -74,6 +85,7 @@ export async function POST(request: Request) {
           slug,
           planId: 1,
         }),
+        redirect: "error",
         cache: "no-store",
         signal: AbortSignal.timeout(10000),
       }
@@ -97,8 +109,35 @@ export async function POST(request: Request) {
     }
 
     const result = await response.json();
+    const project = result?.project;
 
-    return NextResponse.json(result, {
+    if (
+      !project ||
+      typeof project.id !== "string" ||
+      !project.id ||
+      project.organizationId !== authorization.organizationId ||
+      project.name !== name ||
+      project.slug !== slug ||
+      project.status !== "active" ||
+      typeof project.meteringAccountId !== "string" ||
+      !/^[1-9][0-9]*$/.test(project.meteringAccountId) ||
+      typeof result.apiKey !== "string" ||
+      !/^um_[0-9a-f]{64}$/.test(result.apiKey)
+    ) {
+      throw new Error("Invalid project creation response");
+    }
+
+    return NextResponse.json({
+      project: {
+        id: project.id,
+        organizationId: project.organizationId,
+        name: project.name,
+        slug: project.slug,
+        status: project.status,
+        meteringAccountId: project.meteringAccountId,
+      },
+      apiKey: result.apiKey,
+    }, {
       status: 201,
       headers: {
         "Cache-Control": "no-store",
@@ -144,6 +183,7 @@ export async function GET() {
         headers: {
           "X-Admin-Key": adminKey,
         },
+        redirect: "error",
         cache: "no-store",
         signal: AbortSignal.timeout(10000),
       }
