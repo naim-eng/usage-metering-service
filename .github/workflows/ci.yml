@@ -134,7 +134,7 @@ jobs:
         run: |
           docker compose -f docker-compose.mail.e2e.yml up -d
           curl --fail --silent --show-error \
-            --retry 15 --retry-connrefused \
+            --retry 15 --retry-connrefused --retry-all-errors \
             --retry-delay 2 --max-time 5 \
             http://127.0.0.1:8026/api/v1/messages >/dev/null
 
