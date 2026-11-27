@@ -37,6 +37,7 @@ for (const endpoint of protectedEndpoints) {
     request,
   }) => {
     const response = await request.fetch(endpoint.path, {
+      headers: { Origin: "http://localhost:3004" },
       method: endpoint.method,
       data: endpoint.data,
       maxRedirects: 0,

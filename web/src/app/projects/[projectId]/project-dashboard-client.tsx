@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  publicErrorMessage,
+  publicExceptionMessage,
+} from "@/lib/public-error";
+
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import ProjectApiKeys from "./project-api-keys";
@@ -256,7 +261,7 @@ export default function ProjectDashboardClient({
 
         if (!response.ok) {
           throw new Error(
-            result.error || "Unable to load project dashboard."
+            publicErrorMessage(result.error, "Unable to load project dashboard.")
           );
         }
 
@@ -267,9 +272,7 @@ export default function ProjectDashboardClient({
       } catch (err) {
         if (active && !controller.signal.aborted) {
           setError(
-            err instanceof Error
-              ? err.message
-              : "Unable to load dashboard."
+            publicExceptionMessage(err, "Unable to load dashboard.")
           );
         }
       } finally {

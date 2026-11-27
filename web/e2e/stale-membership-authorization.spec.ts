@@ -53,6 +53,7 @@ test("denies project API access when active workspace membership is removed", as
     const keysPath = `/api/projects/${record.id}/api-keys`;
 
     const createdKey = await page.request.post(keysPath, {
+          headers: { Origin: new URL(page.url()).origin },
       data: {
         name: "E2E stale membership key",
       },
@@ -124,6 +125,9 @@ test("denies project API access when active workspace membership is removed", as
     for (const request of requests) {
       const response = await page.request.fetch(request.path, {
         method: request.method,
+        headers: request.method === "GET"
+          ? {}
+          : { Origin: new URL(page.url()).origin },
         data: request.data,
         maxRedirects: 0,
       });

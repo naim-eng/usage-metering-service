@@ -8,7 +8,7 @@ export const errorHandler: ErrorRequestHandler = (
     next
 ) => {
     if (res.headersSent) {
-        next(_error);
+        next(new Error("Internal server error"));
         return;
     }
 

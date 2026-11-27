@@ -1,3 +1,7 @@
+import {
+    isProductionDeployment,
+    validateProductionIngress
+} from "./deployment-config.js";
 import { isSafeText } from "./input-validation.js";
 import { loadApiConfig } from "./api-config.js";
 import { errorHandler } from "./infrastructure/logging/error-handler.js";
@@ -54,6 +58,8 @@ import {
     consumptionLimiter
 } from "./rate-limit.js";
 
+validateProductionIngress();
+
 const app = express();
 configureTrustedProxy(app);
 app.use(createRequestLogger());
@@ -67,7 +73,36 @@ const listPlansService = new ListPlansService(prisma);
 
 const { port: PORT } = loadApiConfig();
 
-app.use(helmet());
+const productionDeployment = isProductionDeployment();
+
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            "frame-ancestors": ["'none'"],
+            "upgrade-insecure-requests":
+                productionDeployment ? [] : null
+        }
+    },
+    xFrameOptions: {
+        action: "deny"
+    },
+    strictTransportSecurity: productionDeployment
+        ? {
+            maxAge: 31536000,
+            includeSubDomains: false,
+            preload: false
+        }
+        : false
+}));
+
+app.use((_req, res, next) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader(
+        "Permissions-Policy",
+        "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+    );
+    next();
+});
 
 // Apply separate limits to metering and management traffic.
 app.use((req, res, next) => {

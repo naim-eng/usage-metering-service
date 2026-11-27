@@ -398,3 +398,70 @@ Remaining production safeguards:
 
 These controls have been validated locally. Production infrastructure
 and deployment-specific protections require separate verification.
+
+## HTTP security headers, CORS and CSRF
+
+The frontend applies baseline HTTP security headers, including
+Content-Security-Policy, frame protection, MIME sniffing protection,
+referrer restrictions, permissions restrictions and cross-origin
+opener protection. The Next.js identification header is disabled.
+
+Frontend API responses use no-store cache protection. The backend
+uses Helmet and explicit cache and permissions protection.
+
+The backend and frontend project APIs do not grant cross-origin
+access through permissive CORS response headers.
+
+Project creation, API key creation and API key revocation require
+an explicitly trusted HTTP or HTTPS Origin before authorization.
+Missing, opaque, malformed and untrusted origins are rejected.
+Host and forwarded headers cannot establish origin trust.
+
+Validation completed:
+- Six origin validation unit tests.
+- Eleven HTTP security browser/API tests.
+- Nine authenticated CSRF rejection scenarios.
+- Project and API key state preservation assertions.
+- Project creation and API key lifecycle regression.
+- Owner, admin and member authorization regression.
+- Tenant isolation and stale membership authorization regression.
+- Backend and frontend TypeScript and frontend lint checks.
+
+Remaining production and regression considerations:
+- The baseline CSP permits inline scripts and styles. A stricter
+  nonce-based policy requires further architectural evaluation.
+- Production HTTPS and HSTS behavior require deployment validation.
+- Backend Helmet HSTS and frame policy alignment remains pending.
+- Trusted ingress and client IP handling remain production blockers.
+- Full application regression remains required before checkpoint closure.
+
+## Error handling and sensitive data protection
+
+Backend structured logging redacts known credential fields,
+including passwords, API keys, session tokens, cookies and
+database connection credentials through four object levels.
+
+Unexpected late-response errors are sanitized before delegation
+to the Express default error handler.
+
+Frontend project API handlers no longer log raw exceptions.
+Customer-facing project, dashboard and API key errors use
+an explicit public message allowlist.
+
+Better Auth warning and error logs exclude raw arguments.
+Unexpected authentication handler exceptions return generic
+HTTP 500 responses with no-store cache protection.
+
+Validation completed:
+- 21 logging and error handling tests.
+- Four public error policy unit tests.
+- Three project and API key browser regression tests.
+- Nine authentication security regression tests.
+- Backend and frontend TypeScript validation.
+- Frontend lint and Git diff validation.
+
+Remaining considerations:
+- Structured redaction is limited to known fields and depths.
+- Authentication logging intentionally limits diagnostic detail.
+- Actual infrastructure failure injection remains outstanding.
+- Full security regression remains required.

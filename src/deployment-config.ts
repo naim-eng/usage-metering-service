@@ -35,3 +35,31 @@ export function requireProductionSecret(
         throw new Error(`${name} must contain a strong production secret`);
     }
 }
+
+export function validateProductionIngress(
+    env: Environment = process.env
+): void {
+    if (!isProductionDeployment(env)) {
+        return;
+    }
+
+    const trustedProxy = env.TRUST_PROXY?.trim();
+
+    if (!trustedProxy || trustedProxy.toLowerCase() === "false") {
+        throw new Error(
+            "Production requires explicit trusted proxy configuration"
+        );
+    }
+
+    if (env.PRODUCTION_INGRESS_CONFIGURED !== "1") {
+        throw new Error(
+            "Production ingress configuration must be confirmed"
+        );
+    }
+
+    if (env.API_REPLICA_COUNT !== "1") {
+        throw new Error(
+            "In-memory API rate limiting requires a single API replica"
+        );
+    }
+}

@@ -149,6 +149,7 @@ test("isolates projects between independent customers", async ({
       const unauthorizedCreation = await page.request.post(
         foreignKeysPath,
         {
+          headers: { Origin: new URL(page.url()).origin },
           data: {
             name: "Unauthorized cross-tenant key",
             organizationId: foreign.organizationId,
@@ -166,6 +167,7 @@ test("isolates projects between independent customers", async ({
       const authorizedCreation = await page.request.post(
         ownKeysPath,
         {
+          headers: { Origin: new URL(page.url()).origin },
           data: {
             name: "E2E tenant isolation key",
             organizationId: foreign.organizationId,
@@ -267,7 +269,8 @@ test("isolates projects between independent customers", async ({
       const unauthorizedRevocation =
         await attackerPage.request.delete(
           `${keysPath}/${key.id}?organizationId=${encodeURIComponent(own.organizationId)}`,
-          { maxRedirects: 0 }
+          {
+          headers: { Origin: new URL(attackerPage.url()).origin }, maxRedirects: 0 }
         );
 
       expect(unauthorizedRevocation.status()).toBe(404);
@@ -279,7 +282,8 @@ test("isolates projects between independent customers", async ({
       const mismatchedProjectRevocation =
         await attackerPage.request.delete(
           `/api/projects/${foreign.id}/api-keys/${key.id}`,
-          { maxRedirects: 0 }
+          {
+          headers: { Origin: new URL(attackerPage.url()).origin }, maxRedirects: 0 }
         );
 
       expect(mismatchedProjectRevocation.status()).toBe(404);
@@ -862,6 +866,7 @@ test("ignores forged organization IDs during project creation", async ({
     expect(session.session.activeOrganizationId).toBe(second.id);
 
     const response = await page.request.post("/api/projects", {
+          headers: { Origin: new URL(page.url()).origin },
       data: {
         name: project.name,
         organizationId: first.id,

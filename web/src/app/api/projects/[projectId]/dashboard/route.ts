@@ -186,8 +186,8 @@ export async function GET(
         "Cache-Control": "no-store"
       }
     });
-  } catch (error) {
-    console.error("Project dashboard request failed:", error);
+  } catch {
+    console.error("Project dashboard request failed");
 
     return NextResponse.json(
       { error: "Unable to connect to project service" },

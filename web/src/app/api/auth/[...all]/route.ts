@@ -1,3 +1,5 @@
+import { isProductionDeployment } from "@/lib/deployment-config";
+import { hasValidTrustedClientIp } from "@/lib/trusted-client-ip";
 import { NextResponse } from "next/server";
 import {
   readLimitedJson,
@@ -20,11 +22,60 @@ function preventCaching(response: Response): Response {
   });
 }
 
+function validateProductionIngress(
+  request: Request
+): Response | null {
+  if (
+    isProductionDeployment() &&
+    !hasValidTrustedClientIp(request)
+  ) {
+    return NextResponse.json(
+      { error: "Authentication service unavailable" },
+      {
+        status: 503,
+        headers: { "Cache-Control": "no-store" },
+      }
+    );
+  }
+
+  return null;
+}
+
+function authenticationFailure(): Response {
+  console.error("Authentication request failed");
+
+  return NextResponse.json(
+    { error: "Authentication service unavailable" },
+    {
+      status: 500,
+      headers: { "Cache-Control": "no-store" },
+    }
+  );
+}
+
 export async function GET(request: Request) {
-  return preventCaching(await handlers.GET(request));
+
+  const ingressFailure = validateProductionIngress(request);
+
+  if (ingressFailure) {
+    return ingressFailure;
+  }
+
+  try {
+    return preventCaching(await handlers.GET(request));
+  } catch {
+    return authenticationFailure();
+  }
 }
 
 export async function POST(request: Request) {
+
+  const ingressFailure = validateProductionIngress(request);
+
+  if (ingressFailure) {
+    return ingressFailure;
+  }
+
   try {
     const contentLength = request.headers.get("content-length");
     const transferEncoding = request.headers.get("transfer-encoding");
@@ -67,5 +118,9 @@ export async function POST(request: Request) {
     );
   }
 
-  return preventCaching(await handlers.POST(request));
+  try {
+    return preventCaching(await handlers.POST(request));
+  } catch {
+    return authenticationFailure();
+  }
 }

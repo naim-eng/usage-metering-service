@@ -166,6 +166,7 @@ test("rejects invalid and duplicate project names", async ({
       const response = await page.request.post(
         "/api/projects",
         {
+          headers: { Origin: new URL(page.url()).origin },
           data: { name },
           maxRedirects: 0,
         }
@@ -210,6 +211,7 @@ test("rejects invalid and duplicate project names", async ({
     const duplicateResponse = await page.request.post(
       "/api/projects",
       {
+          headers: { Origin: new URL(page.url()).origin },
         data: {
           name: project.name.toUpperCase(),
         },

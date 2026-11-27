@@ -62,6 +62,57 @@ test("enforces project API permissions for owners, admins and members", async ({
     const keysPath =
       `/api/projects/${record.id}/api-keys`;
 
+    // A valid owner session must not bypass CSRF protection.
+    const originalKeyResponse = await page.request.get(keysPath);
+
+    expect(originalKeyResponse.status()).toBe(200);
+
+    const originalKeys = await originalKeyResponse.json();
+
+    expect(originalKeys.apiKeys).toHaveLength(1);
+
+    const originalKey = originalKeys.apiKeys[0];
+
+    for (const origin of [
+      undefined,
+      "null",
+      "https://untrusted.example",
+    ]) {
+      const headers: Record<string, string> =
+        origin === undefined ? {} : { Origin: origin };
+
+      const attempts = [
+        await page.request.post("/api/projects", {
+          headers,
+          data: { name: additionalProjects.owner.name },
+        }),
+        await page.request.post(keysPath, {
+          headers,
+          data: { name: "Blocked CSRF key" },
+        }),
+        await page.request.delete(`${keysPath}/${originalKey.id}`, {
+          headers,
+        }),
+      ];
+
+      for (const response of attempts) {
+        expect(response.status()).toBe(403);
+        expect(await response.json()).toEqual({
+          error: "Forbidden request origin",
+        });
+        expect(response.headers()["cache-control"]).toContain("no-store");
+      }
+    }
+
+    const projectsAfterCSRF = await page.request.get("/api/projects");
+    const keysAfterCSRF = await page.request.get(keysPath);
+
+    expect(projectsAfterCSRF.status()).toBe(200);
+    expect(keysAfterCSRF.status()).toBe(200);
+
+    expect(await projectsAfterCSRF.json()).toEqual(initialData);
+    expect(await keysAfterCSRF.json()).toEqual(originalKeys);
+
     for (const role of ["owner", "admin"] as const) {
       if (currentRole !== role) {
         await setTestOrganizationOwnerRole(
@@ -91,6 +142,7 @@ test("enforces project API permissions for owners, admins and members", async ({
       const projectCreation = await page.request.post(
         "/api/projects",
         {
+          headers: { Origin: new URL(page.url()).origin },
           data: {
             name: additionalProjects[role].name,
           },
@@ -103,6 +155,7 @@ test("enforces project API permissions for owners, admins and members", async ({
       const keyCreation = await page.request.post(
         keysPath,
         {
+          headers: { Origin: new URL(page.url()).origin },
           data: {
             name: `E2E ${role} authorization key`,
           },
@@ -137,7 +190,8 @@ test("enforces project API permissions for owners, admins and members", async ({
 
       const revocation = await page.request.delete(
         `${keysPath}/${createdKey.id}`,
-        { maxRedirects: 0 }
+        {
+          headers: { Origin: new URL(page.url()).origin }, maxRedirects: 0 }
       );
 
       expect(revocation.status()).toBe(200);
@@ -164,6 +218,7 @@ test("enforces project API permissions for owners, admins and members", async ({
     const protectedKeyResponse = await page.request.post(
       keysPath,
       {
+          headers: { Origin: new URL(page.url()).origin },
         data: {
           name: "E2E member isolation key",
         },
@@ -308,6 +363,7 @@ test("enforces project API permissions for owners, admins and members", async ({
       await page.request.post(
         "/api/projects",
         {
+          headers: { Origin: new URL(page.url()).origin },
           data: {
             name: additionalProjects.member.name,
           },
@@ -328,6 +384,7 @@ test("enforces project API permissions for owners, admins and members", async ({
       await page.request.post(
         keysPath,
         {
+          headers: { Origin: new URL(page.url()).origin },
           data: {
             name: "Unauthorized member key",
           },
@@ -337,7 +394,8 @@ test("enforces project API permissions for owners, admins and members", async ({
 
       await page.request.delete(
         `${keysPath}/${protectedKey.id}`,
-        { maxRedirects: 0 }
+        {
+          headers: { Origin: new URL(page.url()).origin }, maxRedirects: 0 }
       ),
     ];
 

@@ -1,6 +1,11 @@
 
 "use client";
 
+import {
+  publicErrorMessage,
+  publicExceptionMessage,
+} from "@/lib/public-error";
+
 import { useCallback, useEffect, useState } from "react";
 
 type ApiKey = {
@@ -42,7 +47,7 @@ export default function ProjectApiKeys({ projectId }: Props) {
     const result = await response.json();
 
     if (!response.ok) {
-      throw new Error(result.error || "Unable to load API keys");
+      throw new Error(publicErrorMessage(result.error, "Unable to load API keys"));
     }
 
     setKeys(result.apiKeys as ApiKey[]);
@@ -60,7 +65,7 @@ export default function ProjectApiKeys({ projectId }: Props) {
       } catch (err) {
         if (!controller.signal.aborted) {
           setError(
-            err instanceof Error ? err.message : "Unable to load API keys"
+            publicExceptionMessage(err, "Unable to load API keys")
           );
         }
       } finally {
@@ -101,7 +106,7 @@ export default function ProjectApiKeys({ projectId }: Props) {
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || "Unable to create API key");
+        throw new Error(publicErrorMessage(result.error, "Unable to create API key"));
       }
 
       const created = result as CreatedApiKey;
@@ -128,7 +133,7 @@ export default function ProjectApiKeys({ projectId }: Props) {
       ]);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Unable to create API key"
+        publicExceptionMessage(err, "Unable to create API key")
       );
     } finally {
       setCreating(false);
@@ -160,7 +165,7 @@ export default function ProjectApiKeys({ projectId }: Props) {
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || "Unable to revoke API key");
+        throw new Error(publicErrorMessage(result.error, "Unable to revoke API key"));
       }
 
       setKeys((current) =>
@@ -174,7 +179,7 @@ export default function ProjectApiKeys({ projectId }: Props) {
       setMessage(`API key "${key.name}" was revoked.`);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Unable to revoke API key"
+        publicExceptionMessage(err, "Unable to revoke API key")
       );
     } finally {
       setRevokingId(null);

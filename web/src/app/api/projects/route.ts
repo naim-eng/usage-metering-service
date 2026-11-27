@@ -1,3 +1,4 @@
+import { isTrustedMutationOrigin } from "@/lib/auth";
 import { tryLoadMeteringEnvironment } from "@/lib/environment";
 import { NextResponse } from "next/server";
 import {
@@ -8,6 +9,17 @@ import { authorizeProjectCreation } from "@/lib/authorize-project-creation";
 
 
 export async function POST(request: Request) {
+
+  if (!isTrustedMutationOrigin(request)) {
+    return NextResponse.json(
+      { error: "Forbidden request origin" },
+      {
+        status: 403,
+        headers: { "Cache-Control": "no-store" },
+      },
+    );
+  }
+
   const authorization = await authorizeProjectCreation();
 
   if (!authorization.allowed) {
@@ -245,8 +257,8 @@ export async function GET() {
         },
       }
     );
-  } catch (error) {
-    console.error("Project listing failed:", error);
+  } catch {
+    console.error("Project listing failed");
 
     return NextResponse.json(
       { error: "Unable to retrieve projects" },

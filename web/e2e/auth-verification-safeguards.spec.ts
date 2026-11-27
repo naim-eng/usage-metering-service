@@ -276,7 +276,29 @@ test("concurrent verification cannot preserve the original credential", async ({
       replacement
     );
 
-    await client.get(url, { maxRedirects: 0 });
+    const replays = await Promise.all(
+      Array.from({ length: 3 }, () =>
+        client.get(url, { maxRedirects: 0 })
+      )
+    );
+
+    for (const replay of replays) {
+      expect(replay.status()).toBeLessThan(500);
+    }
+
+    expect(await countTestSessions(account.email)).toBe(0);
+
+    const rejected = await client.post(
+      "/api/auth/sign-in/email",
+      {
+        data: {
+          email: account.email,
+          password: account.password,
+        },
+      }
+    );
+
+    expect(rejected.status()).toBe(401);
 
     const accepted = await client.post(
       "/api/auth/sign-in/email",

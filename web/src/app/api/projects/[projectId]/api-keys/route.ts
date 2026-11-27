@@ -1,3 +1,4 @@
+import { isTrustedMutationOrigin } from "@/lib/auth";
 import { tryLoadMeteringEnvironment } from "@/lib/environment";
 
 import { NextResponse } from "next/server";
@@ -147,8 +148,8 @@ export async function GET(
         },
       }
     );
-  } catch (error) {
-    console.error("Project API key listing failed:", error);
+  } catch {
+    console.error("Project API key listing failed");
 
     return NextResponse.json(
       { error: "Unable to retrieve API keys" },
@@ -162,6 +163,17 @@ export async function POST(
   request: Request,
   context: RouteContext
 ) {
+
+  if (!isTrustedMutationOrigin(request)) {
+    return NextResponse.json(
+      { error: "Forbidden request origin" },
+      {
+        status: 403,
+        headers: { "Cache-Control": "no-store" },
+      },
+    );
+  }
+
   const authorization = await authorizeProjectCreation();
 
   if (!authorization.allowed) {
@@ -307,8 +319,8 @@ export async function POST(
         "Cache-Control": "no-store",
       },
     });
-  } catch (error) {
-    console.error("Project API key creation failed:", error);
+  } catch {
+    console.error("Project API key creation failed");
 
     return NextResponse.json(
       { error: "Unable to create API key" },

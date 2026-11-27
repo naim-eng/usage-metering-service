@@ -95,6 +95,12 @@ export function loadAuthEnvironment(
     );
 
   if (isProductionDeployment(env)) {
+    if (env.PRODUCTION_INGRESS_CONFIGURED !== "1") {
+      throw new Error(
+        "Production authentication requires confirmed trusted ingress"
+      );
+    }
+
     requireProductionSecret(secret, "BETTER_AUTH_SECRET");
     requireProductionSecret(
       decodeURIComponent(database.password),

@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  publicErrorMessage,
+  publicExceptionMessage,
+} from "@/lib/public-error";
+
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
 
@@ -33,7 +38,7 @@ export default function ProjectsClient({
     const result = await response.json();
 
     if (!response.ok) {
-      throw new Error(result.error || "Unable to load projects.");
+      throw new Error(publicErrorMessage(result.error, "Unable to load projects."));
     }
 
     return result.projects;
@@ -47,7 +52,7 @@ export default function ProjectsClient({
         if (active) setProjects(items);
       })
       .catch((err: Error) => {
-        if (active) setError(err.message);
+        if (active) setError(publicExceptionMessage(err, "Unable to load projects."));
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -80,7 +85,7 @@ export default function ProjectsClient({
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || "Project creation failed.");
+        throw new Error(publicErrorMessage(result.error, "Project creation failed."));
       }
 
       if (typeof result.apiKey === "string") {
@@ -93,7 +98,7 @@ export default function ProjectsClient({
       setProjects(await loadProjects());
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Something went wrong."
+        publicExceptionMessage(err, "Something went wrong.")
       );
     } finally {
       setCreating(false);

@@ -192,3 +192,56 @@ Before an actual production deployment:
 Configuration tests do not establish live production readiness.
 No public deployment or production credential rotation is required
 for local development.
+
+## Production configuration safeguards
+
+Production startup requires explicit trusted ingress
+confirmation and trusted backend proxy configuration.
+
+Authentication uses a dedicated validated client IP header
+in production. Local development retains its existing
+authentication IP configuration.
+
+The initial backend deployment is restricted by configuration
+to a single API replica because API rate limiting uses
+process-local memory. Authentication rate limiting uses
+PostgreSQL storage outside isolated E2E execution.
+
+Account activation uses a PostgreSQL transaction and customer
+row locking to coordinate credential invalidation and email
+verification. Repeated activation does not invalidate an
+already established replacement password.
+
+Backend HTTP security configuration denies framing and enables
+HSTS and HTTPS upgrade directives in production only.
+
+### Validation
+
+- 57 configuration and client IP tests passed.
+- 41 targeted browser security tests passed.
+- Enhanced concurrent verification replay regression passed.
+- Backend HTTP security header checks passed.
+- Backend and frontend TypeScript validation passed.
+- Frontend lint validation passed.
+
+### Deployment prerequisites
+
+Actual reverse proxy header sanitization, origin network
+isolation, TLS certificate verification, request timeouts,
+rate limit retention and replica enforcement require
+deployment-level verification.
+
+Operator confirmation variables do not independently
+establish infrastructure security.
+
+Distributed backend rate limiting requires a shared store
+before horizontal scaling.
+
+Better Auth native verification processing continues outside
+the custom account activation transaction. Full native
+verification lifecycle atomicity is not established.
+
+Concurrent replay coverage does not prove every possible
+interleaving of password reset and account activation.
+
+See production-ingress.md for the deployment security contract.

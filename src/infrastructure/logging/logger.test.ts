@@ -119,3 +119,53 @@ test("silent level disables logging", () => {
 
     assert.equal(capture.entries().length, 0);
 });
+
+test("production logger redacts cookies and nested credentials", () => {
+    const capture = captureLogger();
+
+    capture.logger.info({
+        databaseUrl: "SENSITIVE_DATABASE_URL",
+        connectionString: "SENSITIVE_CONNECTION_STRING",
+        sessionToken: "SENSITIVE_SESSION_TOKEN",
+        passwordHash: "SENSITIVE_PASSWORD_HASH",
+        req: {
+            headers: {
+                cookie: "SENSITIVE_REQUEST_COOKIE",
+                authorization: "SENSITIVE_AUTHORIZATION"
+            },
+            body: {
+                currentPassword: "SENSITIVE_CURRENT_PASSWORD",
+                newPassword: "SENSITIVE_NEW_PASSWORD"
+            }
+        },
+        res: {
+            headers: {
+                "set-cookie": ["SENSITIVE_RESPONSE_COOKIE"]
+            }
+        },
+        credentials: {
+            nested: {
+                apiKeyHash: "SENSITIVE_API_KEY_HASH",
+                refreshToken: "SENSITIVE_REFRESH_TOKEN"
+            }
+        },
+        operation: "safe_operation"
+    });
+
+    const [entry] = capture.entries();
+
+    assert.equal(entry.databaseUrl, "[REDACTED]");
+    assert.equal(entry.connectionString, "[REDACTED]");
+    assert.equal(entry.sessionToken, "[REDACTED]");
+    assert.equal(entry.passwordHash, "[REDACTED]");
+    assert.equal(entry.req.headers.cookie, "[REDACTED]");
+    assert.equal(entry.req.headers.authorization, "[REDACTED]");
+    assert.equal(entry.req.body.currentPassword, "[REDACTED]");
+    assert.equal(entry.req.body.newPassword, "[REDACTED]");
+    assert.equal(entry.res.headers["set-cookie"], "[REDACTED]");
+    assert.equal(entry.credentials.nested.apiKeyHash, "[REDACTED]");
+    assert.equal(entry.credentials.nested.refreshToken, "[REDACTED]");
+    assert.equal(entry.operation, "safe_operation");
+
+    assert.ok(!capture.output().includes("SENSITIVE_"));
+});

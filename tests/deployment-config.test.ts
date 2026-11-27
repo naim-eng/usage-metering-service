@@ -1,3 +1,4 @@
+import { validateProductionIngress } from "../src/deployment-config.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
@@ -25,7 +26,10 @@ const secret = randomBytes(32).toString("hex");
 
 const production = {
     DEPLOYMENT_ENV: "production",
-    NODE_ENV: "production"
+    NODE_ENV: "production",
+    PRODUCTION_INGRESS_CONFIGURED: "1",
+    TRUST_PROXY: "192.0.2.10",
+    API_REPLICA_COUNT: "1"
 };
 
 const database = {
@@ -268,4 +272,83 @@ test("production database parameter errors do not expose parameter values", () =
             error instanceof Error &&
             !error.message.includes(sensitive)
     );
+});
+
+test("local deployment does not require production ingress", () => {
+    assert.doesNotThrow(() => validateProductionIngress({}));
+    assert.doesNotThrow(() => validateProductionIngress({
+        DEPLOYMENT_ENV: "local"
+    }));
+});
+
+test("production accepts confirmed single-replica ingress", () => {
+    assert.doesNotThrow(() => validateProductionIngress(production));
+});
+
+test("production requires explicit trusted proxy configuration", () => {
+    for (const value of [undefined, "", " ", "false", "FALSE"]) {
+        assert.throws(
+            () => validateProductionIngress({
+                ...production,
+                TRUST_PROXY: value
+            }),
+            /explicit trusted proxy configuration/
+        );
+    }
+});
+
+test("production requires confirmed ingress configuration", () => {
+    for (const value of [undefined, "", "0", "true"]) {
+        assert.throws(
+            () => validateProductionIngress({
+                ...production,
+                PRODUCTION_INGRESS_CONFIGURED: value
+            }),
+            /ingress configuration must be confirmed/
+        );
+    }
+});
+
+test("production rejects multiple API replicas with memory rate limiting", () => {
+    for (const value of ["2", "3", "10"]) {
+        assert.throws(
+            () => validateProductionIngress({
+                ...production,
+                API_REPLICA_COUNT: value
+            }),
+            /single API replica/
+        );
+    }
+});
+
+test("production rejects missing or invalid replica declarations", () => {
+    for (const value of [undefined, "", "0", "-1", "01", "1.0", "unknown"]) {
+        assert.throws(
+            () => validateProductionIngress({
+                ...production,
+                API_REPLICA_COUNT: value
+            }),
+            /single API replica/
+        );
+    }
+});
+
+test("production authentication requires confirmed trusted ingress", () => {
+    for (const value of [undefined, "", "0", "true"]) {
+        assert.throws(
+            () => loadAuthEnvironment({
+                ...auth,
+                PRODUCTION_INGRESS_CONFIGURED: value
+            }),
+            /confirmed trusted ingress/
+        );
+    }
+});
+
+test("local authentication remains independent of production ingress", () => {
+    assert.doesNotThrow(() => loadAuthEnvironment({
+        ...auth,
+        DEPLOYMENT_ENV: "local",
+        PRODUCTION_INGRESS_CONFIGURED: undefined
+    }));
 });

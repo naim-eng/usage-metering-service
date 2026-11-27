@@ -1,3 +1,4 @@
+import { isTrustedMutationOrigin } from "@/lib/auth";
 import { tryLoadMeteringEnvironment } from "@/lib/environment";
 
 import { NextResponse } from "next/server";
@@ -14,6 +15,17 @@ export async function DELETE(
   _request: Request,
   context: RouteContext
 ) {
+
+  if (!isTrustedMutationOrigin(_request)) {
+    return NextResponse.json(
+      { error: "Forbidden request origin" },
+      {
+        status: 403,
+        headers: { "Cache-Control": "no-store" },
+      },
+    );
+  }
+
   const authorization = await authorizeProjectCreation();
 
   if (!authorization.allowed) {
@@ -101,8 +113,8 @@ export async function DELETE(
         headers: { "Cache-Control": "no-store" },
       }
     );
-  } catch (error) {
-    console.error("Project API key revocation failed:", error);
+  } catch {
+    console.error("Project API key revocation failed");
 
     return NextResponse.json(
       { error: "Unable to revoke API key" },

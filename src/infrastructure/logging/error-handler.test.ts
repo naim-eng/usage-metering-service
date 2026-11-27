@@ -94,5 +94,8 @@ test("error handler delegates after headers are sent", () => {
         }
     );
 
-    assert.equal(delegatedError, fakeError);
+    assert.ok(delegatedError instanceof Error);
+    assert.notEqual(delegatedError, fakeError);
+    assert.equal(delegatedError.message, "Internal server error");
+    assert.ok(!delegatedError.stack?.includes("FAKE_SECRET"));
 });

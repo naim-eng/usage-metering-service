@@ -1,3 +1,6 @@
+import { isProductionDeployment } from "./deployment-config";
+import { TRUSTED_CLIENT_IP_HEADER } from "./trusted-client-ip";
+import { isAllowedRequestOrigin } from "./request-origin";
 import { sendAuthEmail } from "./auth-email";
 import { loadEmailConfig } from "./email-config";
 import { loadAuthEnvironment } from "./environment";
@@ -71,6 +74,16 @@ const authRateLimit: NonNullable<BetterAuthOptions["rateLimit"]> = {
   };
 
 export const auth = betterAuth({
+  logger: {
+    level: "warn",
+    log: (level) => {
+      if (level === "error") {
+        console.error("Authentication operation failed");
+      } else if (level === "warn") {
+        console.warn("Authentication warning");
+      }
+    },
+  },
   emailVerification: {
     sendOnSignUp: true,
     sendOnSignIn: false,
@@ -79,37 +92,68 @@ export const auth = betterAuth({
     beforeEmailVerification: async (user) => {
       const unusablePassword = randomBytes(48).toString("hex");
       const passwordHash = await hashCustomerPassword(unusablePassword);
+      const client = await authPool.connect();
 
-      const result = await authPool.query(
-        `UPDATE auth.account AS account
-         SET password = $1, "updatedAt" = NOW()
-         FROM auth."user" AS customer
-         WHERE account."userId" = customer.id
-           AND customer.id = $2
-           AND customer."emailVerified" = FALSE
-           AND account."providerId" = 'credential'`,
-        [passwordHash, user.id]
-      );
+      let discardConnection = false;
 
-      if (result.rowCount === 0) {
-        const existing = await authPool.query(
+      try {
+        await client.query("BEGIN");
+
+        const customer = await client.query(
           `SELECT "emailVerified"
            FROM auth."user"
-           WHERE id = $1`,
+           WHERE id = $1
+           FOR UPDATE`,
           [user.id]
         );
 
-        if (
-          existing.rowCount === 1 &&
-          existing.rows[0].emailVerified === true
-        ) {
+        if (customer.rowCount !== 1) {
+          throw new Error("Unable to prepare verified account");
+        }
+
+        if (customer.rows[0].emailVerified === true) {
+          await client.query("COMMIT");
           return;
         }
+
+        const credential = await client.query(
+          `UPDATE auth.account
+           SET password = $1, "updatedAt" = NOW()
+           WHERE "userId" = $2
+             AND "providerId" = 'credential'`,
+          [passwordHash, user.id]
+        );
+
+        if (credential.rowCount !== 1) {
+          throw new Error("Unable to prepare verified account credentials");
+        }
+
+        const activation = await client.query(
+          `UPDATE auth."user"
+           SET "emailVerified" = TRUE, "updatedAt" = NOW()
+           WHERE id = $1
+             AND "emailVerified" = FALSE`,
+          [user.id]
+        );
+
+        if (activation.rowCount !== 1) {
+          throw new Error("Unable to activate verified account");
+        }
+
+        await client.query("COMMIT");
+      } catch {
+        try {
+          await client.query("ROLLBACK");
+        } catch {
+          discardConnection = true;
+          throw new Error("Account activation failed");
+        }
+
+        throw new Error("Account activation failed");
+      } finally {
+        client.release(discardConnection);
       }
 
-      if (result.rowCount !== 1) {
-        throw new Error("Unable to prepare verified account credentials");
-      }
     },
 
     sendVerificationEmail: async ({ user, url }) => {
@@ -135,7 +179,9 @@ export const auth = betterAuth({
   advanced: {
     ipAddress: {
       disableIpTracking: false,
-      ipAddressHeaders: [],
+      ipAddressHeaders: isProductionDeployment()
+        ? [TRUSTED_CLIENT_IP_HEADER]
+        : [],
       ipv6Subnet: 64,
     },
     useSecureCookies: new URL(baseURL).protocol === "https:",
@@ -191,3 +237,7 @@ export const auth = betterAuth({
 
   plugins: [organization()],
 });
+
+export function isTrustedMutationOrigin(request: Request): boolean {
+  return isAllowedRequestOrigin(request, trustedOrigins);
+}
