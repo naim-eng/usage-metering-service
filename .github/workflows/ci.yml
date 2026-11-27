@@ -78,6 +78,10 @@ jobs:
           fi
           echo "Migration rerun completed successfully."
 
+      - name: Install frontend test dependencies
+        working-directory: web
+        run: npm ci
+
       - name: Run automated tests
         run: npm test
 
