@@ -10,13 +10,15 @@ The service tracks credit consumption, enforces account and user quotas, prevent
 ### Create a project
 
 1. Sign in to the customer dashboard.
-2. Create a project and select an account plan.
+2. Select your organization workspace and create a project. New projects receive the default Starter account plan.
 3. Open the project's dashboard.
 4. Navigate to **API Keys**.
 5. Enter a descriptive key name and select **Generate API Key**.
 6. Copy the generated API key immediately.
 
 The complete API key is displayed only during creation.
+
+For registration and workspace setup, see the [customer user guide](customer-user-guide.md).
 
 ### API base URL
 
@@ -46,6 +48,11 @@ curl http://localhost:3000/account \
 A successful request returns information about the authenticated project's metering account.
 
 API keys are scoped to their associated project and resolve to that project's metering account.
+
+Project API keys must be active and associated with an active project.
+
+Administrative credentials are not customer API keys.
+Legacy account credentials cannot authenticate project-linked accounts.
 
 ### Security recommendations
 
@@ -129,7 +136,7 @@ Fields:
 | `units` | Positive integer number of credits requested |
 | `requestId` | Unique identifier for the logical operation |
 
-Example accepted response:
+Example accepted response for a new Starter account and Basic user with no previous monthly consumption:
 
 ```json
 {
@@ -137,7 +144,7 @@ Example accepted response:
   "scope": null,
   "rule": null,
   "replayed": false,
-  "accountRemaining": "88",
+  "accountRemaining": "98",
   "userRemaining": "8"
 }
 ```
@@ -175,7 +182,7 @@ A successful replay includes:
 }
 ```
 
-Use a unique `requestId` for every new logical operation.
+Use a unique `requestId` within the metering account for every new logical operation.
 
 Reuse that identifier only when retrying the same operation.
 
@@ -238,6 +245,9 @@ Common HTTP status codes include:
 | `401` | Missing, invalid, or revoked API key |
 | `404` | Requested user or resource not found |
 | `409` | Duplicate resource or conflicting request ID |
+| `413` | Request body exceeds the permitted size |
+| `415` | Unsupported request content type or encoding |
+| `429` | Request rate limit exceeded |
 | `500` | Internal server error |
 
 A consumption request may return HTTP `200` with `accepted: false` when quota rules reject the operation.
@@ -245,6 +255,15 @@ A consumption request may return HTTP `200` with `accepted: false` when quota ru
 Always inspect the `accepted` field before treating a consumption request as authorized.
 
 Do not automatically retry rejected quota decisions.
+
+Send JSON request bodies using Content-Type: application/json.
+The maximum JSON request body size is 16 KiB.
+
+For HTTP 429 responses, use bounded exponential backoff.
+Respect Retry-After when provided.
+
+When retrying a consumption request after a transient failure,
+reuse the original request ID and identical request parameters.
 
 ## 9. Revoke an API Key
 
@@ -256,7 +275,7 @@ To revoke a project API key:
 4. Find the credential you want to revoke.
 5. Select **Revoke** and confirm.
 
-Revoked credentials cannot authenticate future API requests.
+Revocation takes effect immediately for subsequent authentication attempts.
 
 To rotate credentials, generate a replacement key, update your application's configuration, verify the replacement works, and then revoke the previous key.
 
@@ -273,3 +292,53 @@ To rotate credentials, generate a replacement key, update your application's con
 - [ ] Verify usage in the dashboard
 - [ ] Handle authentication and quota errors
 - [ ] Establish an API-key rotation process
+
+## 11. API Endpoint Reference
+
+### Public endpoints
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | /health | Service health |
+| GET | /ready | Database readiness |
+| GET | /plans | Predefined plans |
+
+### Customer endpoints
+
+These endpoints require a valid metering API key.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | /users | Register a metered user |
+| POST | /consume | Record credit consumption |
+| GET | /account | Account allowances |
+| GET | /users | User allowances |
+| GET | /usage/history | Paginated usage history |
+| GET | /usage/monthly | Monthly usage reporting |
+| GET | /notifications | Low-credit notifications |
+| GET | /plans/custom | List account-owned custom plans |
+| POST | /plans | Create a custom plan |
+| PATCH | /plans/:planId | Update a custom plan |
+| PATCH | /accounts/plan | Change the account plan |
+| PATCH | /users/plan | Change a user plan |
+
+### Administrative endpoints
+
+These endpoints require privileged server-side credentials.
+They are not intended for direct customer integrations.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | /accounts | Create a standalone account |
+| POST | /accounts/:accountId/api-key/rotate | Rotate a standalone account key |
+| GET | /projects | List organization projects |
+| POST | /projects | Create a project |
+| GET | /projects/:projectId/dashboard | Retrieve project dashboard |
+| GET | /projects/:projectId/api-keys | List project keys |
+| POST | /projects/:projectId/api-keys | Generate a project key |
+| DELETE | /projects/:projectId/api-keys/:keyId | Revoke a project key |
+
+Project management should be performed through the authenticated
+customer dashboard. Administrative credentials must remain server-side.
+
+Standalone account key rotation does not apply to project-linked accounts.
