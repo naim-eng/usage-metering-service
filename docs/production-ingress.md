@@ -65,3 +65,8 @@ isolation have been implemented and tested.
 - Monitor rate limit storage failures.
 
 Actual infrastructure validation remains a deployment prerequisite.
+
+## Related security documentation
+
+- [Environment security](environment-security.md)
+- [Security regression summary](security-regression-summary.md)

@@ -245,3 +245,8 @@ Concurrent replay coverage does not prove every possible
 interleaving of password reset and account activation.
 
 See production-ingress.md for the deployment security contract.
+
+## Related security documentation
+
+- [Authentication security](authentication-security.md)
+- [Production ingress requirements](production-ingress.md)

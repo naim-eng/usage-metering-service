@@ -29,6 +29,8 @@ enforcing quotas, managing credits and monitoring consumption.
 | Guide | Description |
 |---|---|
 | [Customer user guide](docs/customer-user-guide.md) | Customer onboarding and dashboard usage |
+| [Operations guide](docs/operations-guide.md) | Service maintenance and troubleshooting |
+| [Developer guide](docs/developer-guide.md) | Development and testing workflows |
 | [Installation guide](docs/installation.md) | Local setup and configuration |
 | [Database guide](docs/database.md) | Database schema and migrations |
 | [System architecture](docs/architecture.md) | System design and technical decisions |

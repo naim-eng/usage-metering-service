@@ -465,3 +465,9 @@ Remaining considerations:
 - Authentication logging intentionally limits diagnostic detail.
 - Actual infrastructure failure injection remains outstanding.
 - Full security regression remains required.
+
+## Related security documentation
+
+- [Environment security](environment-security.md)
+- [Production ingress requirements](production-ingress.md)
+- [Security regression summary](security-regression-summary.md)
