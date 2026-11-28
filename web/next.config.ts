@@ -57,7 +57,10 @@ const securityHeaders = [
   },
 ];
 
-if (process.env.DEPLOYMENT_ENV === "production") {
+if (
+  process.env.DEPLOYMENT_ENV === "production" ||
+  process.env.PRODUCTION_IMAGE_BUILD === "1"
+) {
   securityHeaders.push({
     key: "Strict-Transport-Security",
     value: "max-age=31536000",

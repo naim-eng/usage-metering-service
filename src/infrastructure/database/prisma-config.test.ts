@@ -84,15 +84,32 @@ test("encodes special characters in credentials", () => {
     assert.equal(decodeURIComponent(url.password), "p@ss:/?#word");
 });
 
-test("rejects custom CA certificates until supported", () => {
-    const config = loadDatabaseConfig({
-        ...baseEnv,
+test("supports custom CA certificates with strict TLS", () => {
+    const url = buildUrl({
         DB_SSL_MODE: "verify-full",
         DB_SSL_ROOT_CERT: "/tmp/custom-ca.pem"
     });
 
-    assert.throws(
-        () => buildPrismaDatabaseUrl(config),
-        /Custom CA certificates are not yet supported/
-    );
+    assert.equal(url.searchParams.get("sslcert"), "/tmp/custom-ca.pem");
+    assert.equal(url.searchParams.get("sslmode"), "require");
+    assert.equal(url.searchParams.get("sslaccept"), "strict");
+});
+
+test("does not add a custom CA when none is configured", () => {
+    const url = buildUrl({
+        DB_SSL_MODE: "verify-full"
+    });
+
+    assert.equal(url.searchParams.has("sslcert"), false);
+});
+
+test("preserves special characters in certificate paths", () => {
+    const path = "/tmp/database certificates/root+ca.pem";
+
+    const url = buildUrl({
+        DB_SSL_MODE: "verify-full",
+        DB_SSL_ROOT_CERT: path
+    });
+
+    assert.equal(url.searchParams.get("sslcert"), path);
 });

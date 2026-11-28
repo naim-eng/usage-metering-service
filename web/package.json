@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "better-auth": "^1.7.28",
+    "geist": "1.9.2",
     "kysely": "^0.28.20",
     "next": "16.4.6",
     "nodemailer": "^10.6.1",

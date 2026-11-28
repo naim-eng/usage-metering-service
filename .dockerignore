@@ -73,3 +73,7 @@ web/
 
 # Preserve the public root environment template
 !.env.example
+
+# Production deployment artifacts
+deploy/
+**/*.env

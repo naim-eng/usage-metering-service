@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 
 import {
     loadDatabaseConfig,
@@ -7,12 +8,6 @@ import {
 export function buildPrismaDatabaseUrl(
     config: DatabaseConfig = loadDatabaseConfig()
 ): string {
-    if (config.sslMode === "verify-full" && config.sslRootCert) {
-        throw new Error(
-            "Custom CA certificates are not yet supported by the Prisma adapter"
-        );
-    }
-
     const url = new URL("postgresql://localhost");
 
     url.hostname = config.host;
@@ -39,6 +34,12 @@ export function buildPrismaDatabaseUrl(
     if (config.sslMode === "verify-full") {
         url.searchParams.set("sslmode", "require");
         url.searchParams.set("sslaccept", "strict");
+        if (config.sslRootCert) {
+            url.searchParams.set(
+                "sslcert",
+                resolve(config.sslRootCert)
+            );
+        }
     } else {
         url.searchParams.set("sslmode", "disable");
     }
