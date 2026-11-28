@@ -3,8 +3,11 @@ import "dotenv/config";
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
+import { PassThrough } from "node:stream";
 import { prisma } from "../database/prisma.js";
 import { QuotaEventConsumer } from "./QuotaEventConsumer.js";
+import { createLogger } from "../logging/logger.js";
 
 if (process.env.DB_NAME !== "usage_metering_test") {
     throw new Error(
@@ -93,7 +96,20 @@ test("Consumer marks exhausted events as failed", async () => {
         }
     });
 
-    const consumer = new QuotaEventConsumer(prisma);
+    const stream = new PassThrough();
+    let output = "";
+
+    stream.on("data", chunk => {
+        output += chunk.toString();
+    });
+
+    const testLogger = createLogger("info", stream);
+    const consumer = new QuotaEventConsumer(
+        prisma,
+        async () => {},
+        testLogger
+    );
+
     const processed = await consumer.processOne(event.id);
 
     assert.equal(processed, false);
@@ -108,6 +124,34 @@ test("Consumer marks exhausted events as failed", async () => {
         updated.last_error,
         "Processing lease expired after maximum attempts"
     );
+
+    const entries = output.trim()
+        .split("\n")
+        .map(line => JSON.parse(line));
+
+    const warnings = entries.filter(
+        entry => entry.event === "consumer_exhausted_leases"
+    );
+
+    assert.equal(warnings.length, 1);
+    assert.ok(Number.isSafeInteger(warnings[0].count));
+    assert.ok(warnings[0].count >= 1);
+
+    output = "";
+
+    const processedAgain = await consumer.processOne(event.id);
+
+    assert.equal(processedAgain, false);
+
+    const secondEntries = output.trim()
+        ? output.trim().split("\n").map(line => JSON.parse(line))
+        : [];
+
+    const secondWarnings = secondEntries.filter(
+        entry => entry.event === "consumer_exhausted_leases"
+    );
+
+    assert.equal(secondWarnings.length, 0);
 });
 
 test("Concurrent consumers cannot claim the same event twice", async () => {
@@ -145,6 +189,262 @@ test("Concurrent consumers cannot claim the same event twice", async () => {
     assert.ok(updated.processed_at);
 });
 
+test("Consumer cannot overwrite an event completed by a newer worker", async () => {
+    const event = await prisma.outbox_events.create({
+        data: {
+            event_type: "quota.threshold.reached",
+            deduplication_key: `test:lease-reclaimed:${randomUUID()}`,
+            payload: {
+                test: true,
+                scenario: "concurrent-lease-reclamation"
+            }
+        }
+    });
+
+    let handlerStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+        handlerStarted = resolve;
+    });
+
+    let releaseHandler!: () => void;
+    const release = new Promise<void>((resolve) => {
+        releaseHandler = resolve;
+    });
+
+    const consumerA = new QuotaEventConsumer(prisma, async () => {
+        handlerStarted();
+        await release;
+    });
+
+    const consumerB = new QuotaEventConsumer(prisma, async () => {});
+
+    const processingA = consumerA.processOne(event.id);
+
+    await started;
+
+    let processingB: boolean;
+
+    try {
+        const claimed = await prisma.outbox_events.findUniqueOrThrow({
+            where: { id: event.id }
+        });
+
+        assert.equal(claimed.status, "processing");
+        assert.equal(claimed.attempts, 1);
+
+        await prisma.outbox_events.update({
+            where: { id: event.id },
+            data: {
+                available_at: new Date("2020-01-01T00:00:00.000Z")
+            }
+        });
+
+        processingB = await consumerB.processOne(event.id);
+    } finally {
+        releaseHandler();
+    }
+
+    const processingAResult = await processingA;
+
+    assert.equal(processingB, true);
+    assert.equal(processingAResult, false);
+
+    const updated = await prisma.outbox_events.findUniqueOrThrow({
+        where: { id: event.id }
+    });
+
+    assert.equal(updated.status, "completed");
+    assert.equal(updated.attempts, 2);
+    assert.ok(updated.processed_at);
+    assert.equal(updated.last_error, null);
+});
+
+test("Consumer cannot complete an event after its lease expires", async () => {
+    const event = await prisma.outbox_events.create({
+        data: {
+            event_type: "quota.threshold.reached",
+            deduplication_key: `test:expired-during-processing:${randomUUID()}`,
+            payload: {
+                test: true,
+                scenario: "lease-expired-during-processing"
+            }
+        }
+    });
+
+    let handlerStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+        handlerStarted = resolve;
+    });
+
+    let releaseHandler!: () => void;
+    const release = new Promise<void>((resolve) => {
+        releaseHandler = resolve;
+    });
+
+    const stream = new PassThrough();
+    let output = "";
+
+    stream.on("data", chunk => {
+        output += chunk.toString();
+    });
+
+    const testLogger = createLogger("info", stream);
+
+    const consumer = new QuotaEventConsumer(
+        prisma,
+        async () => {
+            handlerStarted();
+            await release;
+        },
+        testLogger
+    );
+
+    const processing = consumer.processOne(event.id);
+
+    await started;
+
+    try {
+        const claimed = await prisma.outbox_events.findUniqueOrThrow({
+            where: { id: event.id }
+        });
+
+        assert.equal(claimed.status, "processing");
+        assert.equal(claimed.attempts, 1);
+
+        await prisma.outbox_events.update({
+            where: { id: event.id },
+            data: {
+                available_at: new Date("2020-01-01T00:00:00.000Z")
+            }
+        });
+    } finally {
+        releaseHandler();
+    }
+
+    const processed = await processing;
+
+    assert.equal(processed, false);
+
+    const updated = await prisma.outbox_events.findUniqueOrThrow({
+        where: { id: event.id }
+    });
+
+    assert.equal(updated.status, "processing");
+    assert.equal(updated.attempts, 1);
+    assert.equal(updated.processed_at, null);
+
+    const entries = output.trim()
+        .split("\n")
+        .map(line => JSON.parse(line));
+
+    const warnings = entries.filter(
+        entry => entry.event === "consumer_lease_lost"
+    );
+
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0].eventId, event.id.toString());
+    assert.equal(warnings[0].attempt, 1);
+    assert.equal(typeof warnings[0].durationMs, "number");
+    assert.ok(Number.isFinite(warnings[0].durationMs));
+    assert.ok(warnings[0].durationMs >= 0);
+});
+
+test("Consumer cannot schedule a retry after its lease expires", async () => {
+    const event = await prisma.outbox_events.create({
+        data: {
+            event_type: "quota.threshold.reached",
+            deduplication_key: `test:expired-handler-failure:${randomUUID()}`,
+            payload: {
+                test: true,
+                scenario: "failure-after-lease-expiration"
+            }
+        }
+    });
+
+    let handlerStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+        handlerStarted = resolve;
+    });
+
+    let releaseHandler!: () => void;
+    const release = new Promise<void>((resolve) => {
+        releaseHandler = resolve;
+    });
+
+    const stream = new PassThrough();
+    let output = "";
+
+    stream.on("data", chunk => {
+        output += chunk.toString();
+    });
+
+    const testLogger = createLogger("info", stream);
+
+    const consumer = new QuotaEventConsumer(
+        prisma,
+        async () => {
+            handlerStarted();
+            await release;
+            throw new Error("Simulated failure after lease expiration");
+        },
+        testLogger
+    );
+
+    const processing = consumer.processOne(event.id);
+
+    await started;
+
+    try {
+        const claimed = await prisma.outbox_events.findUniqueOrThrow({
+            where: { id: event.id }
+        });
+
+        assert.equal(claimed.status, "processing");
+        assert.equal(claimed.attempts, 1);
+
+        await prisma.outbox_events.update({
+            where: { id: event.id },
+            data: {
+                available_at: new Date("2020-01-01T00:00:00.000Z")
+            }
+        });
+    } finally {
+        releaseHandler();
+    }
+
+    const processed = await processing;
+
+    assert.equal(processed, false);
+
+    const updated = await prisma.outbox_events.findUniqueOrThrow({
+        where: { id: event.id }
+    });
+
+    assert.equal(updated.status, "processing");
+    assert.equal(updated.attempts, 1);
+    assert.equal(
+        updated.available_at.toISOString(),
+        "2020-01-01T00:00:00.000Z"
+    );
+    assert.equal(updated.last_error, null);
+    assert.equal(updated.processed_at, null);
+
+    const entries = output.trim()
+        .split("\n")
+        .map(line => JSON.parse(line));
+
+    const warnings = entries.filter(
+        entry => entry.event === "consumer_lease_lost"
+    );
+
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0].eventId, event.id.toString());
+    assert.equal(warnings[0].attempt, 1);
+    assert.equal(typeof warnings[0].durationMs, "number");
+    assert.ok(Number.isFinite(warnings[0].durationMs));
+    assert.ok(warnings[0].durationMs >= 0);
+});
+
 test("Consumer schedules a retry when event handling fails", async () => {
     const event = await prisma.outbox_events.create({
         data: {
@@ -171,7 +471,7 @@ test("Consumer schedules a retry when event handling fails", async () => {
 
     assert.equal(updated.status, "pending");
     assert.equal(updated.attempts, 1);
-    assert.equal(updated.last_error, "Simulated processing failure");
+    assert.equal(updated.last_error, "Event handler failed");
     assert.equal(updated.processed_at, null);
 
     // The first failed attempt should schedule a retry
@@ -182,6 +482,55 @@ test("Consumer schedules a retry when event handling fails", async () => {
         delayMs > 0 && delayMs <= 5000,
         `Unexpected retry delay: ${delayMs}ms`
     );
+});
+
+test("Consumer applies exponential backoff on intermediate failures", async () => {
+    for (const [attempt, expectedDelaySeconds] of [
+        [2, 10],
+        [3, 20],
+        [4, 40]
+    ]) {
+        const event = await prisma.outbox_events.create({
+            data: {
+                event_type: "quota.threshold.reached",
+                deduplication_key: `test:retry-backoff:${randomUUID()}`,
+                payload: {
+                    test: true,
+                    scenario: "intermediate-retry-backoff"
+                },
+                status: "pending",
+                attempts: attempt - 1
+            }
+        });
+
+        const consumer = new QuotaEventConsumer(prisma, async () => {
+            throw new Error("Simulated retry failure");
+        });
+
+        const before = Date.now();
+        const processed = await consumer.processOne(event.id);
+        const after = Date.now();
+
+        assert.equal(processed, false);
+
+        const updated = await prisma.outbox_events.findUniqueOrThrow({
+            where: { id: event.id }
+        });
+
+        assert.equal(updated.status, "pending");
+        assert.equal(updated.attempts, attempt);
+        assert.equal(updated.last_error, "Event handler failed");
+        assert.equal(updated.processed_at, null);
+
+        const scheduledAt = updated.available_at.getTime();
+        const expectedDelayMs = expectedDelaySeconds * 1000;
+
+        assert.ok(
+            scheduledAt >= before + expectedDelayMs - 2000 &&
+            scheduledAt <= after + expectedDelayMs + 2000,
+            `Unexpected retry delay for attempt ${attempt}`
+        );
+    }
 });
 
 test("Consumer stops retrying after the fifth processing failure", async () => {
@@ -214,7 +563,280 @@ test("Consumer stops retrying after the fifth processing failure", async () => {
     assert.equal(updated.attempts, 5);
     assert.equal(
         updated.last_error,
-        "Final simulated processing failure"
+        "Event handler failed"
     );
     assert.equal(updated.processed_at, null);
+});
+
+test("Consumer failure logs include safe diagnostic metadata", async () => {
+    const stream = new PassThrough();
+    let output = "";
+
+    stream.on("data", chunk => {
+        output += chunk.toString();
+    });
+
+    const testLogger = createLogger("info", stream);
+    const secret = "TEST_CONSUMER_SECRET_DO_NOT_LOG";
+
+    const event = await prisma.outbox_events.create({
+        data: {
+            event_type: "quota.threshold.reached",
+            deduplication_key: `test:consumer-log:${randomUUID()}`,
+            payload: {
+                credential: secret
+            }
+        }
+    });
+
+    const consumer = new QuotaEventConsumer(
+        prisma,
+        async () => {
+            throw new Error(secret);
+        },
+        testLogger
+    );
+
+    const processed = await consumer.processOne(event.id);
+
+    assert.equal(processed, false);
+
+    const entries = output.trim()
+        .split("\n")
+        .map(line => JSON.parse(line));
+
+    const failure = entries.find(
+        entry => entry.event === "consumer_event_failed"
+    );
+
+    assert.ok(failure);
+    assert.equal(failure.eventId, event.id.toString());
+    assert.equal(failure.attempt, 1);
+    assert.equal(failure.exhausted, false);
+    assert.equal(typeof failure.durationMs, "number");
+    assert.ok(Number.isFinite(failure.durationMs));
+    assert.ok(failure.durationMs >= 0);
+    assert.ok(!output.includes(secret));
+});
+
+test("Consumer never persists sensitive exception details", async () => {
+    const fakeCredential = "FAKE_TEST_CREDENTIAL_DO_NOT_LOG";
+
+    const event = await prisma.outbox_events.create({
+        data: {
+            event_type: "quota.threshold.reached",
+            deduplication_key: `test:sensitive-error:${randomUUID()}`,
+            payload: {
+                test: true,
+                scenario: "sensitive-exception"
+            }
+        }
+    });
+
+    const consumer = new QuotaEventConsumer(prisma, async () => {
+        throw new Error(`Database operation failed: ${fakeCredential}`);
+    });
+
+    const processed = await consumer.processOne(event.id);
+
+    assert.equal(processed, false);
+
+    const updated = await prisma.outbox_events.findUniqueOrThrow({
+        where: { id: event.id }
+    });
+
+    assert.equal(updated.status, "pending");
+    assert.equal(updated.attempts, 1);
+    assert.equal(updated.last_error, "Event handler failed");
+    assert.ok(!updated.last_error?.includes(fakeCredential));
+    assert.equal(updated.processed_at, null);
+});
+
+
+test("Consumer recovers after a real worker process crash", {
+    timeout: 15000
+}, async () => {
+    const event = await prisma.outbox_events.create({
+        data: {
+            event_type: "quota.threshold.reached",
+            deduplication_key: `test:process-crash:${randomUUID()}`,
+            payload: {
+                test: true,
+                scenario: "real-process-crash"
+            }
+        }
+    });
+
+    const child = spawn(
+        process.execPath,
+        [
+            "--import",
+            "tsx",
+            "src/infrastructure/events/crash-test-worker.ts"
+        ],
+        {
+            cwd: process.cwd(),
+            env: {
+                ...process.env,
+                DB_NAME: "usage_metering_test",
+                CRASH_TEST_EVENT_ID: String(event.id)
+            },
+            stdio: ["ignore", "pipe", "pipe"]
+        }
+    );
+
+    let output = "";
+
+    const exited = new Promise<{
+        code: number | null;
+        signal: NodeJS.Signals | null;
+    }>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("exit", (code, signal) => {
+            resolve({ code, signal });
+        });
+    });
+
+    try {
+        await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                cleanup();
+                reject(new Error(
+                    "Timed out waiting for crash-test handler"
+                ));
+            }, 10000);
+
+            const onData = (chunk: Buffer) => {
+                output += chunk.toString();
+
+                if (output.includes("HANDLER_STARTED")) {
+                    cleanup();
+                    resolve();
+                }
+            };
+
+            const onExit = () => {
+                cleanup();
+                reject(new Error(
+                    "Crash-test worker exited before handler started"
+                ));
+            };
+
+            const cleanup = () => {
+                clearTimeout(timeout);
+                child.stdout?.off("data", onData);
+                child.off("exit", onExit);
+            };
+
+            child.stdout?.on("data", onData);
+            child.once("exit", onExit);
+        });
+
+        const claimed = await prisma.outbox_events.findUniqueOrThrow({
+            where: { id: event.id }
+        });
+
+        assert.equal(claimed.status, "processing");
+        assert.equal(claimed.attempts, 1);
+
+        child.kill("SIGKILL");
+
+        const result = await exited;
+
+        assert.equal(result.signal, "SIGKILL");
+
+        const stranded = await prisma.outbox_events.findUniqueOrThrow({
+            where: { id: event.id }
+        });
+
+        assert.equal(stranded.status, "processing");
+        assert.equal(stranded.attempts, 1);
+        assert.equal(stranded.processed_at, null);
+
+        await prisma.outbox_events.update({
+            where: { id: event.id },
+            data: {
+                available_at: new Date("2020-01-01T00:00:00.000Z")
+            }
+        });
+
+        const replacement = new QuotaEventConsumer(
+            prisma,
+            async () => {}
+        );
+
+        assert.equal(await replacement.processOne(event.id), true);
+
+        const recovered = await prisma.outbox_events.findUniqueOrThrow({
+            where: { id: event.id }
+        });
+
+        assert.equal(recovered.status, "completed");
+        assert.equal(recovered.attempts, 2);
+        assert.ok(recovered.processed_at);
+        assert.equal(recovered.last_error, null);
+    } finally {
+        if (child.exitCode === null && child.signalCode === null) {
+            child.kill("SIGKILL");
+        }
+
+        await exited.catch(() => {});
+    }
+});
+
+test("Consumer completion logs include safe processing duration", async () => {
+    const stream = new PassThrough();
+    let output = "";
+
+    stream.on("data", chunk => {
+        output += chunk.toString();
+    });
+
+    const testLogger = createLogger("info", stream);
+    const secret = "TEST_COMPLETION_SECRET_DO_NOT_LOG";
+
+    const event = await prisma.outbox_events.create({
+        data: {
+            event_type: "quota.threshold.reached",
+            deduplication_key: `test:completion-log:${randomUUID()}`,
+            payload: {
+                credential: secret
+            }
+        }
+    });
+
+    const consumer = new QuotaEventConsumer(
+        prisma,
+        async () => {},
+        testLogger
+    );
+
+    const processed = await consumer.processOne(event.id);
+
+    assert.equal(processed, true);
+
+    const updated = await prisma.outbox_events.findUniqueOrThrow({
+        where: { id: event.id }
+    });
+
+    assert.equal(updated.status, "completed");
+
+    const entries = output.trim()
+        .split("\n")
+        .map(line => JSON.parse(line));
+
+    const completions = entries.filter(
+        entry => entry.event === "consumer_event_completed"
+    );
+
+    assert.equal(completions.length, 1);
+
+    const completion = completions[0];
+
+    assert.equal(completion.eventId, event.id.toString());
+    assert.equal(completion.attempt, 1);
+    assert.equal(typeof completion.durationMs, "number");
+    assert.ok(Number.isFinite(completion.durationMs));
+    assert.ok(completion.durationMs >= 0);
+    assert.ok(!output.includes(secret));
 });

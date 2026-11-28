@@ -1,26 +1,31 @@
 
 import type { Request, Response, NextFunction } from "express";
 import { prisma } from "./infrastructure/database/prisma.js";
-import { hashApiKey } from "./api-keys.js";
+import { hashApiKey, isValidApiKey } from "./api-keys.js";
+import { logger } from "./infrastructure/logging/logger.js";
 
 export async function authenticateAccount(
     req: Request,
     res: Response,
     next: NextFunction
 ): Promise<void> {
-    const apiKey = req.header("X-API-Key");
+    const values = req.headersDistinct["x-api-key"];
+    const apiKey = values?.length === 1 ? values[0] : undefined;
 
-    if (!apiKey || !apiKey.startsWith("um_")) {
+    if (!isValidApiKey(apiKey)) {
         res.status(401).json({
-            error: "Missing or invalid API key"
+            error: "Invalid API key"
         });
         return;
     }
 
     try {
-        const account = await prisma.accounts.findUnique({
+        const keyHash = hashApiKey(apiKey);
+
+        // Preserve support for existing account API keys.
+        let account = await prisma.accounts.findUnique({
             where: {
-                api_key_hash: hashApiKey(apiKey)
+                api_key_hash: keyHash
             },
             select: {
                 id: true,
@@ -28,6 +33,62 @@ export async function authenticateAccount(
                 plan_id: true
             }
         });
+
+        // Project-linked accounts must use managed project keys.
+        // Standalone accounts remain independently accessible.
+        if (account) {
+            const linkedProject = await prisma.projects.findUnique({
+                where: {
+                    metering_account_id: account.id
+                },
+                select: {
+                    status: true
+                }
+            });
+
+            if (linkedProject) {
+                res.status(401).json({
+                    error: "Invalid API key"
+                });
+                return;
+            }
+        }
+
+        // If the key is not an account key, check project API keys.
+        if (!account) {
+            const projectKey = await prisma.project_api_keys.findUnique({
+                where: {
+                    key_hash: keyHash
+                },
+                select: {
+                    revoked_at: true,
+                    project: {
+                        select: {
+                            status: true,
+                            metering_account_id: true
+                        }
+                    }
+                }
+            });
+
+            if (
+                projectKey &&
+                projectKey.revoked_at === null &&
+                projectKey.project.status === "active" &&
+                projectKey.project.metering_account_id !== null
+            ) {
+                account = await prisma.accounts.findUnique({
+                    where: {
+                        id: projectKey.project.metering_account_id
+                    },
+                    select: {
+                        id: true,
+                        name: true,
+                        plan_id: true
+                    }
+                });
+            }
+        }
 
         if (!account) {
             res.status(401).json({
@@ -45,7 +106,8 @@ export async function authenticateAccount(
 
         next();
     } catch (error) {
-        console.error("Authentication failed:", error);
+        logger.error({ event: "authentication_failed", operation: "authenticate_account" }, "Authentication operation failed");
+
         res.status(500).json({
             error: "Internal server error"
         });

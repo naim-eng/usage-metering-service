@@ -1,3 +1,4 @@
+import { logger } from "./infrastructure/logging/logger.js";
 
 import { Router } from "express";
 import { authenticateAccount } from "./auth.js";
@@ -20,7 +21,7 @@ reportsRouter.get(
 
         if (
             typeof month !== "string" ||
-            !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)
+            !/^(?!0000)\d{4}-(0[1-9]|1[0-2])$/.test(month)
         ) {
             res.status(400).json({
                 error: "Month must be in YYYY-MM format"
@@ -43,7 +44,7 @@ reportsRouter.get(
                 return;
             }
 
-            console.error("Monthly report failed:", error);
+            logger.error({ event: "api_operation_failed", operation: "get_monthly_report" }, "API operation failed");
 
             res.status(500).json({
                 error: "Failed to retrieve monthly report"

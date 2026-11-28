@@ -6,7 +6,7 @@
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:unit && npm run test:integration",
-    "test:unit": "tsx --test src/test-quota.ts",
+    "test:unit": "tsx --test src/admin-auth.test.ts src/api-keys.test.ts src/api-config.test.ts src/test-quota.ts src/security-middleware.test.ts src/proxy-config.test.ts src/readiness.test.ts src/shutdown.test.ts src/infrastructure/database/config.test.ts src/infrastructure/database/pg-config.test.ts src/infrastructure/database/prisma-config.test.ts src/infrastructure/logging/logger.test.ts src/infrastructure/logging/request-logger.test.ts src/infrastructure/logging/error-handler.test.ts src/infrastructure/events/consumer-worker.test.ts src/infrastructure/events/outbox-monitor.test.ts web/src/lib/environment.test.ts web/src/lib/password-policy.test.ts web/src/lib/password-crypto.test.ts web/src/lib/password-screening.test.ts web/src/lib/password-screening-integration.test.ts tests/deployment-config.test.ts web/src/lib/email-config.test.ts web/src/lib/dashboard-response.test.ts src/input-validation.test.ts web/src/lib/request-json.test.ts web/src/lib/authentication-json.test.ts src/request-protection.test.ts web/src/lib/request-origin.test.ts web/src/lib/public-error.test.ts web/src/lib/trusted-client-ip.test.ts",
     "test:integration": "bash scripts/run-integration-tests.sh",
     "consumer": "tsx src/infrastructure/events/run-consumer.ts"
   },
@@ -16,16 +16,22 @@
   "description": "",
   "devDependencies": {
     "@types/express": "^5.0.6",
-    "@types/node": "^26.6.5",
+    "@types/node": "^22.20.7",
     "@types/pg": "^8.23.1",
     "prisma": "6.12.0",
-    "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   },
   "dependencies": {
     "@prisma/client": "6.12.0",
-    "dotenv": "^18.0.7",
+    "dotenv": "^18.0.10",
     "express": "^5.3.0",
-    "pg": "^8.23.1"
+    "express-rate-limit": "^8.7.5",
+    "helmet": "^8.3.0",
+    "pg": "^8.23.1",
+    "pino": "^10.4.0",
+    "tsx": "^4.23.15"
+  },
+  "engines": {
+    "node": ">=22 <23"
   }
 }

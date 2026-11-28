@@ -1,3 +1,4 @@
+import { logger } from "./infrastructure/logging/logger.js";
 import { Router } from "express";
 
 import { authenticateAccount } from "./auth.js";
@@ -20,7 +21,7 @@ notificationsRouter.get(
 
             res.status(200).json(result);
         } catch (error) {
-            console.error("Failed to retrieve notifications:", error);
+            logger.error({ event: "api_operation_failed", operation: "get_notifications" }, "API operation failed");
 
             res.status(500).json({
                 error: "Failed to retrieve notifications"

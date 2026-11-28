@@ -123,7 +123,7 @@ test("Rejects consumption without an API key", async () => {
     });
 
     assert.equal(result.status, 401);
-    assert.equal(result.data.error, "Missing or invalid API key");
+    assert.equal(result.data.error, "Invalid API key");
 });
 
 // ------------------------------------------------------------
@@ -1869,4 +1869,755 @@ test("Custom plan listing returns only plans owned by the account", async () => 
     );
 
     assert.equal(unauthorized.status, 401);
+});
+
+// PROJECT API: Administrator authentication.
+test("Project creation rejects unauthorized requests without writing records", async () => {
+    const organizationId = randomUUID();
+    const name = `Unauthorized Project ${randomUUID()}`;
+
+    const body = {
+        organizationId,
+        name,
+        slug: `unauthorized-${randomUUID()}`,
+        planId: 1
+    };
+
+    const missingKey = await post("/projects", body);
+
+    assert.equal(missingKey.status, 401);
+    assert.equal(missingKey.data.error, "Unauthorized");
+
+    const invalidKey = await post(
+        "/projects",
+        body,
+        { "X-Admin-Key": `invalid-${randomUUID()}` }
+    );
+
+    assert.equal(invalidKey.status, 401);
+    assert.equal(invalidKey.data.error, "Unauthorized");
+
+    const accounts = await pool.query(
+        "SELECT COUNT(*)::int AS total FROM accounts WHERE name = $1",
+        [name]
+    );
+
+    const projects = await pool.query(
+        "SELECT COUNT(*)::int AS total FROM projects WHERE organization_id = $1",
+        [organizationId]
+    );
+
+    assert.equal(accounts.rows[0]?.total, 0);
+    assert.equal(projects.rows[0]?.total, 0);
+});
+
+// PROJECT API: Successful provisioning through HTTP.
+test("Project API provisions an account and quota history", async () => {
+    const organizationId = randomUUID();
+    const name = `HTTP Project ${organizationId}`;
+
+    await pool.query(
+        `INSERT INTO auth.organization
+         (id, name, slug, "createdAt")
+         VALUES ($1, $2, $3, NOW())`,
+        [organizationId, "HTTP Project Test", organizationId]
+    );
+
+    try {
+        const result = await post(
+            "/projects",
+            {
+                organizationId,
+                name,
+                slug: "http-project",
+                planId: 1
+            },
+            { "X-Admin-Key": getAdminKey() }
+        );
+
+        assert.equal(result.status, 201);
+        assert.equal(result.data.project.organizationId, organizationId);
+        assert.equal(result.data.project.status, "active");
+        assert.match(result.data.apiKey, /^um_[a-f0-9]{64}$/);
+
+        const records = await pool.query(
+            `SELECT
+                 p.id,
+                 a.plan_id,
+                 h.monthly_limit,
+                 h.max_per_request
+             FROM projects p
+             JOIN accounts a
+               ON a.id = p.metering_account_id
+             JOIN plan_limit_history h
+               ON h.account_id = a.id
+             WHERE p.organization_id = $1
+               AND h.change_type = 'baseline'`,
+            [organizationId]
+        );
+
+        assert.equal(records.rows.length, 1);
+        assert.equal(String(records.rows[0].plan_id), "1");
+        assert.equal(String(records.rows[0].monthly_limit), "100");
+        assert.equal(String(records.rows[0].max_per_request), "20");
+    } finally {
+        await pool.query(
+            `DELETE FROM project_api_keys
+             WHERE project_id IN (
+                 SELECT id FROM projects
+                 WHERE organization_id = $1
+             )`,
+            [organizationId]
+        );
+
+        const deleted = await pool.query(
+            `DELETE FROM projects
+             WHERE organization_id = $1
+             RETURNING metering_account_id`,
+            [organizationId]
+        );
+
+        for (const row of deleted.rows) {
+            await pool.query(
+                "DELETE FROM plan_limit_history WHERE account_id = $1",
+                [row.metering_account_id]
+            );
+
+            await pool.query(
+                "DELETE FROM accounts WHERE id = $1",
+                [row.metering_account_id]
+            );
+        }
+
+        await pool.query(
+            "DELETE FROM auth.organization WHERE id = $1",
+            [organizationId]
+        );
+    }
+});
+
+// PROJECT API: Test helpers.
+async function createProjectTestOrganization(name: string) {
+    const id = randomUUID();
+
+    await pool.query(
+        `INSERT INTO auth.organization
+         (id, name, slug, "createdAt")
+         VALUES ($1, $2, $3, NOW())`,
+        [id, name, id]
+    );
+
+    return id;
+}
+
+async function createProjectForTest(organizationId: string, name: string) {
+    const result = await post(
+        "/projects",
+        {
+            organizationId,
+            name,
+            slug: `project-${randomUUID()}`,
+            planId: 1
+        },
+        { "X-Admin-Key": getAdminKey() }
+    );
+
+    assert.equal(
+        result.status,
+        201,
+        `Project creation failed: ${JSON.stringify(result.data)}`
+    );
+
+    return result.data;
+}
+
+async function cleanupProjectTestOrganization(organizationId: string) {
+    await pool.query(
+        `DELETE FROM project_api_keys
+         WHERE project_id IN (
+             SELECT id FROM projects
+             WHERE organization_id = $1
+         )`,
+        [organizationId]
+    );
+
+    const deleted = await pool.query(
+        `DELETE FROM projects
+         WHERE organization_id = $1
+         RETURNING metering_account_id`,
+        [organizationId]
+    );
+
+    for (const row of deleted.rows) {
+        if (row.metering_account_id !== null) {
+            await pool.query(
+                "DELETE FROM plan_limit_history WHERE account_id = $1",
+                [row.metering_account_id]
+            );
+
+            await pool.query(
+                "DELETE FROM accounts WHERE id = $1",
+                [row.metering_account_id]
+            );
+        }
+    }
+
+    await pool.query(
+        "DELETE FROM auth.organization WHERE id = $1",
+        [organizationId]
+    );
+}
+
+// PROJECT API: Listing authentication.
+test("Project listing rejects unauthorized requests", async () => {
+    const organizationId = randomUUID();
+    const path = `/projects?organizationId=${encodeURIComponent(organizationId)}`;
+
+    const missingKey = await request("GET", path);
+
+    assert.equal(missingKey.status, 401);
+    assert.equal(missingKey.data.error, "Unauthorized");
+
+    const invalidKey = await request(
+        "GET",
+        path,
+        undefined,
+        { "X-Admin-Key": `invalid-${randomUUID()}` }
+    );
+
+    assert.equal(invalidKey.status, 401);
+});
+
+// PROJECT API: Organization isolation.
+test("Project listing only returns projects belonging to the requested organization", async () => {
+    const organizationA = await createProjectTestOrganization(
+        "Project Listing Organization A"
+    );
+
+    const organizationB = await createProjectTestOrganization(
+        "Project Listing Organization B"
+    );
+
+    try {
+        const projectA = await createProjectForTest(
+            organizationA,
+            "Organization A Project"
+        );
+
+        const projectB = await createProjectForTest(
+            organizationB,
+            "Organization B Project"
+        );
+
+        const resultA = await request(
+            "GET",
+            `/projects?organizationId=${encodeURIComponent(organizationA)}`,
+            undefined,
+            { "X-Admin-Key": getAdminKey() }
+        );
+
+        const resultB = await request(
+            "GET",
+            `/projects?organizationId=${encodeURIComponent(organizationB)}`,
+            undefined,
+            { "X-Admin-Key": getAdminKey() }
+        );
+
+        assert.equal(resultA.status, 200);
+        assert.equal(resultB.status, 200);
+
+        assert.equal(resultA.data.projects.length, 1);
+        assert.equal(resultB.data.projects.length, 1);
+
+        assert.equal(resultA.data.projects[0].id, projectA.project.id);
+        assert.equal(resultB.data.projects[0].id, projectB.project.id);
+
+        assert.equal(
+            resultA.data.projects[0].organizationId,
+            organizationA
+        );
+
+        assert.equal(
+            resultB.data.projects[0].organizationId,
+            organizationB
+        );
+    } finally {
+        await cleanupProjectTestOrganization(organizationA);
+        await cleanupProjectTestOrganization(organizationB);
+    }
+});
+
+// PROJECT API: Sensitive information protection.
+test("Project listing never exposes API keys or account credentials", async () => {
+    const organizationId = await createProjectTestOrganization(
+        "Project Security Test"
+    );
+
+    try {
+        const created = await createProjectForTest(
+            organizationId,
+            "Secure Listing Project"
+        );
+
+        const credentials = await pool.query(
+            `SELECT a.api_key_hash
+             FROM projects p
+             JOIN accounts a
+               ON a.id = p.metering_account_id
+             WHERE p.id = $1`,
+            [created.project.id]
+        );
+
+        assert.equal(credentials.rows.length, 1);
+
+        const result = await request(
+            "GET",
+            `/projects?organizationId=${encodeURIComponent(organizationId)}`,
+            undefined,
+            { "X-Admin-Key": getAdminKey() }
+        );
+
+        assert.equal(result.status, 200);
+        assert.equal(result.data.projects.length, 1);
+
+        const listedProject = result.data.projects[0];
+
+        assert.deepEqual(
+            Object.keys(listedProject).sort(),
+            [
+                "id",
+                "organizationId",
+                "name",
+                "slug",
+                "status",
+                "createdAt"
+            ].sort()
+        );
+
+        const serialized = JSON.stringify(listedProject);
+
+        assert.ok(!serialized.includes(created.apiKey));
+        assert.ok(!serialized.includes(credentials.rows[0].api_key_hash));
+    } finally {
+        await cleanupProjectTestOrganization(organizationId);
+    }
+});
+
+
+
+// PROJECT DASHBOARD API TESTS
+
+test("Project dashboard rejects missing and invalid administrator keys", async () => {
+    const projectId = randomUUID();
+    const organizationId = randomUUID();
+
+    const path = `/projects/${projectId}/dashboard?organizationId=${organizationId}`;
+
+    const missingKey = await request("GET", path);
+
+    assert.equal(missingKey.status, 401);
+    assert.equal(missingKey.data.error, "Unauthorized");
+
+    const invalidKey = await request(
+        "GET",
+        path,
+        undefined,
+        { "X-Admin-Key": `invalid-${randomUUID()}` }
+    );
+
+    assert.equal(invalidKey.status, 401);
+    assert.equal(invalidKey.data.error, "Unauthorized");
+});
+
+test("Project dashboard rejects invalid month parameters", async () => {
+    const result = await request(
+        "GET",
+        `/projects/${randomUUID()}/dashboard?organizationId=${randomUUID()}&month=2026-13`,
+        undefined,
+        { "X-Admin-Key": getAdminKey() }
+    );
+
+    assert.equal(result.status, 400);
+    assert.equal(result.data.error, "Month must be in YYYY-MM format");
+});
+
+test("Project dashboard returns real isolated usage data without exposing credentials", async () => {
+    const organizationId = await createProjectTestOrganization(
+        "Dashboard Integration Test"
+    );
+
+    let accountId: string | undefined;
+    let projectId: string | undefined;
+
+    try {
+        const created = await createProjectForTest(
+            organizationId,
+            "Dashboard Test Project"
+        );
+
+        const createdProjectId = created.project.id;
+        projectId = createdProjectId;
+
+        const apiKey = created.apiKey;
+        assert.ok(apiKey);
+
+        const userId = `dashboard-user-${randomUUID()}`;
+
+        const user = await post(
+            "/users",
+            { userId, planId: 3 },
+            { "X-API-Key": apiKey }
+        );
+
+        assert.equal(
+            user.status,
+            201,
+            `User creation failed: ${JSON.stringify(user.data)}`
+        );
+
+        const requestId = randomUUID();
+
+        const consumption = await post(
+            "/consume",
+            {
+                userId,
+                units: 2,
+                requestId
+            },
+            { "X-API-Key": apiKey }
+        );
+
+        assert.equal(consumption.status, 200);
+        assert.equal(consumption.data.accepted, true);
+
+        const result = await request(
+            "GET",
+            `/projects/${encodeURIComponent(createdProjectId)}/dashboard?organizationId=${encodeURIComponent(organizationId)}&month=${currentUtcMonth()}`,
+            undefined,
+            { "X-Admin-Key": getAdminKey() }
+        );
+
+        assert.equal(
+            result.status,
+            200,
+            `Dashboard retrieval failed: ${JSON.stringify(result.data)}`
+        );
+
+        assert.equal(result.data.project.id, projectId);
+        assert.equal(result.data.project.organizationId, organizationId);
+        assert.equal(result.data.project.name, "Dashboard Test Project");
+
+        assert.ok(result.data.account, "Account data is missing");
+        assert.ok(result.data.users, "User allowance data is missing");
+        assert.ok(result.data.monthlyReport, "Monthly report is missing");
+        assert.ok(result.data.usageHistory, "Usage history is missing");
+        assert.ok(result.data.notifications, "Notifications are missing");
+
+        // Verify that the dashboard's account has the expected actual usage.
+        const account = await pool.query(
+            "SELECT metering_account_id FROM projects WHERE id = $1",
+            [projectId]
+        );
+
+        assert.equal(account.rows.length, 1);
+
+        accountId = String(account.rows[0].metering_account_id);
+
+        const usage = await pool.query(
+            `SELECT mu.units_used::text AS units_used
+             FROM monthly_usage mu
+             JOIN users u ON u.id = mu.user_id
+             WHERE mu.account_id = $1
+               AND u.external_user_id = $2
+             ORDER BY mu.month_start DESC
+             LIMIT 1`,
+            [accountId, userId]
+        );
+
+        assert.equal(usage.rows.length, 1);
+        assert.equal(usage.rows[0].units_used, "2");
+
+        // Verify that API credentials never appear in the dashboard response.
+        const credentials = await pool.query(
+            `SELECT a.api_key_hash
+             FROM projects p
+             JOIN accounts a ON a.id = p.metering_account_id
+             WHERE p.id = $1`,
+            [projectId]
+        );
+
+        assert.equal(credentials.rows.length, 1);
+
+        const serialized = JSON.stringify(result.data);
+
+        assert.ok(!serialized.includes(apiKey));
+        assert.ok(!serialized.includes(credentials.rows[0].api_key_hash));
+
+        assert.ok(!serialized.includes("api_key_hash"));
+    } finally {
+        // Remove dependent records before deleting the test account.
+        if (accountId) {
+            await pool.query(
+                "DELETE FROM usage_requests WHERE account_id = $1",
+                [accountId]
+            );
+
+            await pool.query(
+                "DELETE FROM low_credit_notifications WHERE account_id = $1",
+                [accountId]
+            );
+
+            await pool.query(
+                "DELETE FROM monthly_usage WHERE account_id = $1",
+                [accountId]
+            );
+
+            await pool.query(
+                "DELETE FROM plan_limit_history WHERE account_id = $1",
+                [accountId]
+            );
+
+            await pool.query(
+                "DELETE FROM users WHERE account_id = $1",
+                [accountId]
+            );
+        }
+
+        await cleanupProjectTestOrganization(organizationId);
+    }
+});
+
+test("Project dashboard prevents cross-organization project access", async () => {
+    const organizationA = await createProjectTestOrganization(
+        "Dashboard Organization A"
+    );
+
+    const organizationB = await createProjectTestOrganization(
+        "Dashboard Organization B"
+    );
+
+    try {
+        const projectB = await createProjectForTest(
+            organizationB,
+            "Organization B Private Project"
+        );
+
+        const result = await request(
+            "GET",
+            `/projects/${encodeURIComponent(projectB.project.id)}/dashboard?organizationId=${encodeURIComponent(organizationA)}`,
+            undefined,
+            { "X-Admin-Key": getAdminKey() }
+        );
+
+        assert.equal(result.status, 404);
+        assert.equal(result.data.error, "Project not found");
+    } finally {
+        await cleanupProjectTestOrganization(organizationA);
+        await cleanupProjectTestOrganization(organizationB);
+    }
+});
+
+test("Project dashboard rejects projects without a metering account", async () => {
+    const organizationId = await createProjectTestOrganization(
+        "Dashboard Pending Project Test"
+    );
+
+    try {
+        const projectId = randomUUID();
+
+        await pool.query(
+            `INSERT INTO projects
+                (id, organization_id, name, slug, status)
+             VALUES ($1, $2, $3, $4, 'pending')`,
+            [
+                projectId,
+                organizationId,
+                "Pending Dashboard Project",
+                `pending-${randomUUID()}`
+            ]
+        );
+
+        const result = await request(
+            "GET",
+            `/projects/${encodeURIComponent(projectId)}/dashboard?organizationId=${encodeURIComponent(organizationId)}`,
+            undefined,
+            { "X-Admin-Key": getAdminKey() }
+        );
+
+        assert.equal(result.status, 409);
+        assert.equal(
+            result.data.error,
+            "Project metering account is not available"
+        );
+    } finally {
+        await cleanupProjectTestOrganization(organizationId);
+    }
+});
+
+test("Standalone account API key rotation requires administrative authentication and invalidates the old key", async () => {
+    const name = `Rotation Test ${randomUUID()}`;
+    let accountId: string | undefined;
+
+    try {
+        const created = await post(
+            "/accounts",
+            { name, planId: 1 },
+            { "X-Admin-Key": getAdminKey() }
+        );
+
+        assert.equal(created.status, 201);
+
+        accountId = String(created.data.account.id);
+
+        const originalKey = created.data.apiKey;
+        const endpoint =
+            `/accounts/${accountId}/api-key/rotate`;
+
+        const inspect = async (key: string) => {
+            return fetch("http://localhost:3001/account", {
+                headers: { "X-API-Key": key }
+            });
+        };
+
+        assert.equal((await inspect(originalKey)).status, 200);
+
+        const unauthorized = await post(endpoint, {});
+        assert.equal(unauthorized.status, 401);
+
+        const wrongAdmin = await post(
+            endpoint,
+            {},
+            { "X-Admin-Key": "invalid-admin-key" }
+        );
+
+        assert.equal(wrongAdmin.status, 401);
+        assert.equal((await inspect(originalKey)).status, 200);
+
+        const before = await pool.query(
+            `SELECT id, name, plan_id, created_at
+             FROM accounts WHERE id = $1`,
+            [accountId]
+        );
+
+        const rotated = await post(
+            endpoint,
+            {},
+            { "X-Admin-Key": getAdminKey() }
+        );
+
+        assert.equal(rotated.status, 200);
+        assert.equal(rotated.data.accountId, accountId);
+        assert.match(rotated.data.apiKey, /^um_[0-9a-f]{64}$/);
+        assert.notEqual(rotated.data.apiKey, originalKey);
+
+        const rejected = await inspect(originalKey);
+        assert.equal(rejected.status, 401);
+        assert.deepEqual(await rejected.json(), {
+            error: "Invalid API key"
+        });
+
+        assert.equal(
+            (await inspect(rotated.data.apiKey)).status,
+            200
+        );
+
+        const after = await pool.query(
+            `SELECT id, name, plan_id, created_at
+             FROM accounts WHERE id = $1`,
+            [accountId]
+        );
+
+        assert.deepEqual(after.rows, before.rows);
+
+        const repeated = await post(
+            endpoint,
+            {},
+            { "X-Admin-Key": getAdminKey() }
+        );
+
+        assert.equal(repeated.status, 200);
+
+        assert.equal(
+            (await inspect(rotated.data.apiKey)).status,
+            401
+        );
+
+        assert.equal(
+            (await inspect(repeated.data.apiKey)).status,
+            200
+        );
+
+    } finally {
+        if (accountId !== undefined) {
+            await pool.query(
+                "DELETE FROM plan_limit_history WHERE account_id = $1",
+                [accountId]
+            );
+
+            await pool.query(
+                "DELETE FROM accounts WHERE id = $1",
+                [accountId]
+            );
+        }
+    }
+});
+
+test("Standalone account rotation rejects project-linked accounts and invalid account IDs", async () => {
+    const organizationId =
+        await createProjectTestOrganization("Rotation Isolation Test");
+
+    try {
+        const created = await createProjectForTest(
+            organizationId,
+            "Rotation Isolation Project"
+        );
+
+        const accountId = created.project.meteringAccountId;
+
+        const rejected = await post(
+            `/accounts/${accountId}/api-key/rotate`,
+            {},
+            { "X-Admin-Key": getAdminKey() }
+        );
+
+        assert.equal(rejected.status, 404);
+
+        const existingKey = await fetch(
+            "http://localhost:3001/account",
+            {
+                headers: {
+                    "X-API-Key": created.apiKey
+                }
+            }
+        );
+
+        assert.equal(existingKey.status, 200);
+
+        for (const invalidId of [
+            "0",
+            "-1",
+            "abc",
+            "1.5",
+            "9223372036854775808"
+        ]) {
+            const response = await post(
+                `/accounts/${invalidId}/api-key/rotate`,
+                {},
+                { "X-Admin-Key": getAdminKey() }
+            );
+
+            assert.equal(response.status, 400);
+        }
+
+        const missing = await post(
+            "/accounts/9223372036854775807/api-key/rotate",
+            {},
+            { "X-Admin-Key": getAdminKey() }
+        );
+
+        assert.equal(missing.status, 404);
+
+    } finally {
+        await cleanupProjectTestOrganization(organizationId);
+    }
 });

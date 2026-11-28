@@ -1,3 +1,5 @@
+import { isSafeText, parsePositiveInteger } from "./input-validation.js";
+import { logger } from "./infrastructure/logging/logger.js";
 
 import { Router } from "express";
 import { authenticateAccount } from "./auth.js";
@@ -21,7 +23,7 @@ plansRouter.get("/custom", authenticateAccount, async (_req, res) => {
 
         res.status(200).json(result);
     } catch (error) {
-        console.error("Custom plan listing failed:", error);
+        logger.error({ event: "api_operation_failed", operation: "list_custom_plans" }, "API operation failed");
         res.status(500).json({
             error: "Failed to retrieve custom plans"
         });
@@ -34,7 +36,7 @@ plansRouter.post("/", authenticateAccount, async (req, res) => {
         req.body ?? {};
 
     if (
-        typeof name !== "string" ||
+        !isSafeText(name) ||
         !name.trim() ||
         name.length > 100 ||
         !["account", "user"].includes(planType) ||
@@ -60,7 +62,7 @@ plansRouter.post("/", authenticateAccount, async (req, res) => {
 
         res.status(201).json(result);
     } catch (error) {
-        console.error("Plan creation failed:", error);
+        logger.error({ event: "api_operation_failed", operation: "create_custom_plan" }, "API operation failed");
         res.status(500).json({
             error: "Failed to create plan"
         });
@@ -69,7 +71,7 @@ plansRouter.post("/", authenticateAccount, async (req, res) => {
 
 // Update a custom plan and record changes for assigned members.
 plansRouter.patch("/:planId", authenticateAccount, async (req, res) => {
-    const planId = Number(req.params.planId);
+    const planId = parsePositiveInteger(req.params.planId);
 
     const { name, monthlyLimit, maxPerRequest } = req.body ?? {};
 
@@ -93,7 +95,7 @@ plansRouter.patch("/:planId", authenticateAccount, async (req, res) => {
 
     if (
         (name !== undefined &&
-            (typeof name !== "string" ||
+            (!isSafeText(name) ||
              !name.trim() ||
              name.length > 100)) ||
         (monthlyLimit !== undefined &&
@@ -137,7 +139,7 @@ plansRouter.patch("/:planId", authenticateAccount, async (req, res) => {
             return;
         }
 
-        console.error("Plan update failed:", error);
+        logger.error({ event: "api_operation_failed", operation: "update_custom_plan" }, "API operation failed");
         res.status(500).json({
             error: "Failed to update custom plan"
         });

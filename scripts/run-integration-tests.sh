@@ -8,6 +8,8 @@ cd "$(dirname "$0")/.."
 TEST_PORT=3001
 TEST_DB="usage_metering_test"
 
+export DEPLOYMENT_ENV=local
+
 SERVER_PID=""
 SERVER_LOG=""
 
@@ -87,7 +89,10 @@ DB_NAME="$TEST_DB" npx tsx --test \
     src/integration.test.ts \
     src/monthly-report-regression.test.ts \
     src/low-credit-notifications.integration.test.ts \
-    src/infrastructure/events/QuotaEventConsumer.integration.test.ts
+    src/infrastructure/events/QuotaEventConsumer.integration.test.ts \
+    src/application/services/CreateProjectService.integration.test.ts \
+    src/application/services/ManageProjectApiKeysService.integration.test.ts \
+    src/project-api-key-auth.integration.test.ts
 
 echo ""
 echo "Integration tests completed successfully."

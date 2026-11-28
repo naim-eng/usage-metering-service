@@ -1,0 +1,14 @@
+*.env
+.env
+.env.*
+secrets/
+certificates/
+backups/
+*.pem
+*.key
+*.p12
+*.pfx
+*.dump
+*.sql.gz
+
+!*.env.example

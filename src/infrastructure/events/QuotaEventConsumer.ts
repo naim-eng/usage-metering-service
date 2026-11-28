@@ -1,4 +1,6 @@
 import type { PrismaClient } from "../../generated/prisma/client.js";
+import { logger } from "../logging/logger.js";
+import type { Logger } from "pino";
 
 interface ClaimedEvent {
     id: bigint;
@@ -15,12 +17,8 @@ export class QuotaEventConsumer {
         private readonly prisma: PrismaClient,
         private readonly handleEvent: (
             event: ClaimedEvent
-        ) => Promise<void> = async (event) => {
-            console.log(
-                `[Event Consumer] Processing ${event.event_type}`,
-                event.payload
-            );
-        }
+        ) => Promise<void> = async () => {},
+        private readonly log: Logger = logger
     ) {}
 
     async processOne(eventId?: bigint): Promise<boolean> {
@@ -29,7 +27,7 @@ export class QuotaEventConsumer {
         // Mark events whose final processing attempt expired.
         // Only expired leases are eligible, so active workers
         // completing their final attempt are not interrupted.
-        await this.prisma.outbox_events.updateMany({
+        const exhaustedLeases = await this.prisma.outbox_events.updateMany({
             where: {
                 status: "processing",
                 attempts: { gte: MAX_ATTEMPTS },
@@ -40,6 +38,16 @@ export class QuotaEventConsumer {
                 last_error: "Processing lease expired after maximum attempts"
             }
         });
+
+        if (exhaustedLeases.count > 0) {
+            this.log.warn(
+                {
+                    event: "consumer_exhausted_leases",
+                    count: exhaustedLeases.count
+                },
+                "Expired processing leases marked as failed"
+            );
+        }
 
         const events = await this.prisma.$transaction(async (tx) => {
             return tx.$queryRaw<ClaimedEvent[]>`
@@ -77,8 +85,18 @@ export class QuotaEventConsumer {
         }
 
         const event = events[0];
+        const processingStartedAt = performance.now();
 
         try {
+            this.log.info(
+                {
+                    event: "consumer_event_processing",
+                    eventId: event.id.toString(),
+                    attempt: event.attempts
+                },
+                "Processing quota event"
+            );
+
             await this.handleEvent(event);
 
             const result = await this.prisma.outbox_events.updateMany({
@@ -96,27 +114,49 @@ export class QuotaEventConsumer {
             });
 
             if (result.count !== 1) {
-                console.warn(
-                    `[Event Consumer] Event ${event.id} lost its processing lease`
+                this.log.warn(
+                    {
+                        event: "consumer_lease_lost",
+                        eventId: event.id.toString(),
+                        attempt: event.attempts,
+                        durationMs: Math.round(
+                            performance.now() - processingStartedAt
+                        )
+                    },
+                    "Event processing lease lost"
                 );
                 return false;
             }
 
+            this.log.info(
+                {
+                    event: "consumer_event_completed",
+                    eventId: event.id.toString(),
+                    attempt: event.attempts,
+                    durationMs: Math.round(
+                        performance.now() - processingStartedAt
+                    )
+                },
+                "Quota event processing completed"
+            );
+
             return true;
-        } catch (error) {
-            const message =
-                error instanceof Error ? error.message : String(error);
+        } catch {
+            // Never persist raw exception messages.
+            // They may contain credentials or sensitive event data.
+            const message = "Event handler failed";
 
             const exhausted = event.attempts >= MAX_ATTEMPTS;
 
             const retryDelaySeconds =
                 Math.min(5 * 2 ** (event.attempts - 1), 300);
 
-            await this.prisma.outbox_events.updateMany({
+            const result = await this.prisma.outbox_events.updateMany({
                 where: {
                     id: event.id,
                     status: "processing",
-                    attempts: event.attempts
+                    attempts: event.attempts,
+                    available_at: { gt: new Date() }
                 },
                 data: {
                     status: exhausted ? "failed" : "pending",
@@ -127,8 +167,32 @@ export class QuotaEventConsumer {
                 }
             });
 
-            console.error(
-                `[Event Consumer] Failed event ${event.id}: ${message}`
+            if (result.count !== 1) {
+                this.log.warn(
+                    {
+                        event: "consumer_lease_lost",
+                        eventId: event.id.toString(),
+                        attempt: event.attempts,
+                        durationMs: Math.round(
+                            performance.now() - processingStartedAt
+                        )
+                    },
+                    "Event processing lease lost"
+                );
+                return false;
+            }
+
+            this.log.error(
+                {
+                    event: "consumer_event_failed",
+                    eventId: event.id.toString(),
+                    attempt: event.attempts,
+                    exhausted,
+                    durationMs: Math.round(
+                        performance.now() - processingStartedAt
+                    )
+                },
+                "Event handler failed"
             );
 
             return false;

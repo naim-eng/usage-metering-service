@@ -10,3 +10,27 @@ coverage/
 backups/
 
 /src/generated/prisma
+
+# Sensitive local configuration and credentials
+.envrc
+.envrc.*
+secrets/
+credentials/
+credentials.json
+service-account.json
+
+# Private keys and certificate containers
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Database backup artifacts
+*.dump
+*.sql.gz
+
+# Secret scanning reports
+gitleaks-report.json
+gitleaks-report-*.json
+secret-scan-report.json
+secret-scan-report-*.json

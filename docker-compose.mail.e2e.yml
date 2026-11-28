@@ -1,0 +1,10 @@
+name: usage-metering-mail-e2e
+
+services:
+  mailpit:
+    image: axllent/mailpit@sha256:23a2ef85bc50853ab3093645d1d64679afd8887e89da5e48a88940c172591a4e
+    ports:
+      - "127.0.0.1:1026:1025"
+      - "127.0.0.1:8026:8025"
+    environment:
+      MP_MAX_MESSAGES: "500"
