@@ -216,3 +216,40 @@ test("worker does not emit heartbeats during stalled processing", async () => {
 
     assert.equal(capture.entries().length, 0);
 });
+
+test("successful polling invokes the health callback", async () => {
+    let calls = 0;
+
+    const worker = new ConsumerWorker(
+        { processOne: async () => false },
+        0,
+        undefined,
+        undefined,
+        () => {
+            calls++;
+            worker.stop();
+        }
+    );
+
+    await worker.run();
+    assert.equal(calls, 1);
+});
+
+test("failed polling does not invoke the health callback", async () => {
+    let calls = 0;
+
+    const worker = new ConsumerWorker(
+        {
+            processOne: async () => {
+                throw new Error("Synthetic polling failure");
+            }
+        },
+        0,
+        undefined,
+        undefined,
+        () => { calls++; }
+    );
+
+    await assert.rejects(worker.run(), /Synthetic polling failure/);
+    assert.equal(calls, 0);
+});

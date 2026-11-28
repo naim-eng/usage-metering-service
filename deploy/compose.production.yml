@@ -12,6 +12,11 @@ x-backend: &backend
 
 services:
   db:
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     image: postgres:17
     restart: unless-stopped
     env_file:
@@ -30,6 +35,7 @@ services:
       - ./certificates/database.key:/run/certificates/database.key:ro
     networks:
       - database
+      - auth_database
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U metering -d usage_metering"]
       interval: 5s
@@ -37,6 +43,11 @@ services:
       retries: 20
 
   migrate:
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     <<: *backend
     command: ["node", "--import", "tsx", "scripts/migrations/run.ts"]
     restart: "no"
@@ -47,6 +58,11 @@ services:
         condition: service_healthy
 
   api:
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     <<: *backend
     restart: unless-stopped
     networks:
@@ -62,6 +78,17 @@ services:
       retries: 10
 
   consumer:
+    healthcheck:
+      test: ["CMD", "node", "-e", "const t=Number(require('fs').readFileSync('/tmp/metering-consumer-heartbeat','utf8'));const age=Date.now()-t;process.exit(Number.isFinite(t)&&age>=0&&age<120000?0:1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     <<: *backend
     command: ["node", "--import", "tsx", "src/infrastructure/events/run-consumer.ts"]
     restart: unless-stopped
@@ -73,6 +100,17 @@ services:
         condition: service_completed_successfully
 
   frontend:
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/sign-in').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     image: usage-metering-frontend:production
     build:
       context: ../web
@@ -83,7 +121,7 @@ services:
     volumes:
       - ./certificates/ca.pem:/run/certificates/ca.pem:ro
     networks:
-      database:
+      auth_database:
       frontend:
         ipv4_address: 172.30.242.20
     depends_on:
@@ -91,6 +129,16 @@ services:
         condition: service_healthy
 
   proxy:
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     image: nginx:stable-alpine
     restart: unless-stopped
     ports:
@@ -126,6 +174,8 @@ networks:
       config:
         - subnet: 172.30.242.0/24
   database:
+    internal: true
+  auth_database:
     internal: true
 
 volumes:

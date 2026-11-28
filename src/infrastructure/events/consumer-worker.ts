@@ -15,7 +15,8 @@ export class ConsumerWorker {
         private readonly consumer: ConsumerProcessor,
         private readonly pollIntervalMs = 2000,
         private readonly log: Logger = logger,
-        private readonly now: () => number = () => performance.now()
+        private readonly now: () => number = () => performance.now(),
+        private readonly onSuccessfulPoll: () => void = () => {}
     ) {
         if (
             !Number.isSafeInteger(pollIntervalMs) ||
@@ -41,6 +42,8 @@ export class ConsumerWorker {
             if (this.controller.signal.aborted) {
                 break;
             }
+
+            this.onSuccessfulPoll();
 
             pollCount++;
 

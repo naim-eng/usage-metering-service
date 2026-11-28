@@ -1,10 +1,32 @@
+import { writeFileSync, rmSync } from "node:fs";
 import { logger } from "../logging/logger.js";
 import { prisma } from "../database/prisma.js";
 import { QuotaEventConsumer } from "./QuotaEventConsumer.js";
 import { ConsumerWorker } from "./consumer-worker.js";
 
 const consumer = new QuotaEventConsumer(prisma);
-const worker = new ConsumerWorker(consumer);
+const heartbeatPath = "/tmp/metering-consumer-heartbeat";
+
+rmSync(heartbeatPath, { force: true });
+
+let lastHeartbeatWrite = -Infinity;
+
+const worker = new ConsumerWorker(
+    consumer,
+    2000,
+    logger,
+    () => performance.now(),
+    () => {
+        const now = performance.now();
+
+        if (now - lastHeartbeatWrite >= 10_000) {
+            writeFileSync(heartbeatPath, String(Date.now()), {
+                mode: 0o600
+            });
+            lastHeartbeatWrite = now;
+        }
+    }
+);
 
 process.on("SIGINT", () => {
     logger.info(
@@ -31,6 +53,7 @@ async function main(): Promise<void> {
     try {
         await worker.run();
     } finally {
+        rmSync(heartbeatPath, { force: true });
         await prisma.$disconnect();
 
         logger.info(
