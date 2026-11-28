@@ -26,6 +26,8 @@ enforcing quotas, managing credits and monitoring consumption.
 
 ## Documentation
 
+- [Project completion and release assessment](docs/project-completion.md)
+
 | Guide | Description |
 |---|---|
 | [Customer user guide](docs/customer-user-guide.md) | Customer onboarding and dashboard usage |

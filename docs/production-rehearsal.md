@@ -84,3 +84,19 @@ Before commercial deployment:
 
 Ingress confirmation variables are operator declarations,
 not independent proof of infrastructure security.
+
+
+## Subsequent Rehearsal Verification
+
+The subsequent deployment preparation work completed
+independent Prisma TLS certificate and hostname rejection
+checks, additional network isolation, operational monitoring,
+database backup and restoration, and application rollback
+rehearsals.
+
+These results supersede earlier pending verification items
+where applicable.
+
+See [deployment readiness](deployment-readiness.md) and
+[project completion assessment](project-completion.md)
+for the consolidated results and remaining limitations.
